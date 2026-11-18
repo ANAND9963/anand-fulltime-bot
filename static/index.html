@@ -106,7 +106,9 @@
       <button onclick="uploadResume()">Upload &amp; parse</button>
       <span class="muted" id="resumeInfo"></span>
     </div>
-    <p class="muted">Upload a new resume any time; resume facts refresh but your visa / EEO / salary answers are kept.</p>
+    <p class="muted">Upload a new resume any time; it's saved in a folder for that date and becomes the one used for new
+      applications. Resume facts refresh but your visa / EEO / salary answers are kept.</p>
+    <table class="grid"><thead><tr><th>Date</th><th>File</th><th>Used in</th><th></th></tr></thead><tbody id="resumeRows"></tbody></table>
   </div>
   <div class="card">
     <h3>Profile <span class="muted">(used to fill forms)</span></h3>

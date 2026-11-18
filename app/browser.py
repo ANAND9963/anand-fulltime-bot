@@ -121,7 +121,8 @@ class Worker:
         if not prof.get("resume_path"):
             db.log(pid, "Upload a resume first", "error")
             return
-        db.x("UPDATE jobs SET status='applying', status_note=NULL WHERE id=?", (job_id,))
+        db.x("UPDATE jobs SET status='applying', status_note=NULL, resume_used=? WHERE id=?",
+             (prof["resume_path"], job_id))
         actx = apply.ApplyContext(pid, job, self)
         actx.log(f"applying: {job['title']} -> {job.get('apply_url') or job['url']}")
         page = self._page(pid)

@@ -74,7 +74,8 @@ async function loadJobs() {
     <td><span class="pill ${j.sponsorship}">${j.sponsorship}</span></td>
     <td>${Math.round((j.score || 0) * 100)}%</td>
     <td>${esc((j.posted_at || '').slice(0, 10))}</td>
-    <td><span class="pill ${j.status}">${j.status}</span><div class="note">${esc(j.status_note || '')}</div></td></tr>`).join('')
+    <td><span class="pill ${j.status}">${j.status}</span><div class="note">${esc(j.status_note || '')}</div>
+      ${j.resume_used ? `<div class="note">resume: ${esc(j.resume_used.split(/[\\/]/).slice(-2).join('/'))}</div>` : ''}</td></tr>`).join('')
     || '<tr><td colspan="9" class="muted">No jobs here. Run "Find jobs" on the Dashboard.</td></tr>';
 }
 $('#jobStatus').onchange = loadJobs;
@@ -122,7 +123,8 @@ let PROF = {};
 async function loadProfile() {
   PROF = await api(`/api/profile/${PID}`);
   $('#profName').value = PROF.name;
-  $('#resumeInfo').textContent = PROF.resume_path ? `Current: ${PROF.resume_path.split(/[\\/]/).pop()} (${PROF.resume_chars} chars)` : 'No resume yet';
+  $('#resumeInfo').textContent = PROF.resume_path ? `Current: ${PROF.resume_path.split(/[\\/]/).slice(-2).join('/')} (${PROF.resume_chars} chars)` : 'No resume yet';
+  loadResumes();
   const keys = [...new Set([...PROF.fields, ...EXTRA, ...Object.keys(PROF.data)])];
   $('#profFields').innerHTML = keys.map(k => {
     const v = PROF.data[k] ?? '';
@@ -131,6 +133,16 @@ async function loadProfile() {
       ${big ? `<textarea data-k="${k}" rows="3">${esc(v)}</textarea>` : `<input data-k="${k}" value="${esc(v)}">`}</label>`;
   }).join('');
 }
+async function loadResumes() {
+  const rows = await api(`/api/profile/${PID}/resumes`);
+  $('#resumeRows').innerHTML = rows.map(r => `<tr>
+    <td>${esc(r.folder)}<div class="note">${esc(new Date(r.uploaded_at).toLocaleTimeString())}</div></td>
+    <td>${r.exists ? `<a href="/api/profile/${PID}/resumes/${r.id}/file" target="_blank">${esc(r.filename)}</a>` : esc(r.filename) + ' <span class="note">(file missing)</span>'}</td>
+    <td>${r.used_in} application${r.used_in === 1 ? '' : 's'}</td>
+    <td>${r.active ? '<span class="pill applied">in use</span>' : r.exists ? `<button class="ghost" onclick="useResume(${r.id})">Use this one</button>` : ''}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">No resumes uploaded yet.</td></tr>';
+}
+async function useResume(id) { await api(`/api/profile/${PID}/resumes/${id}/use`, {method: 'POST'}); loadProfile(); }
 function addField() {
   const k = $('#newFieldKey').value.trim().toLowerCase().replace(/\W+/g, '_'); if (!k) return;
   PROF.data[k] = ''; $('#newFieldKey').value = ''; saveProfile().then(loadProfile);

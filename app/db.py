@@ -80,6 +80,14 @@ CREATE TABLE IF NOT EXISTS email_events (
     job_id INTEGER,
     UNIQUE (profile_id, msg_id)
 );
+CREATE TABLE IF NOT EXISTS resumes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    path TEXT NOT NULL,                       -- data/resumes/<profile>/<YYYY-MM-DD>/<file>
+    text TEXT,
+    uploaded_at TEXT
+);
 CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     profile_id INTEGER, ts TEXT, level TEXT, msg TEXT
@@ -100,7 +108,31 @@ def conn():
 _conn = conn()
 with _lock:
     _conn.executescript(SCHEMA)
+    _cols = {r[1] for r in _conn.execute("PRAGMA table_info(jobs)")}
+    if "resume_used" not in _cols:                  # which resume file went with each application
+        _conn.execute("ALTER TABLE jobs ADD COLUMN resume_used TEXT")
     _conn.commit()
+
+
+def migrate_resumes():
+    """Move resumes uploaded before dated folders existed into data/resumes/<pid>/<date>/ and record them."""
+    import shutil
+    for p in q("SELECT id, resume_path, resume_text, created_at FROM profiles WHERE resume_path IS NOT NULL"):
+        if q("SELECT 1 FROM resumes WHERE profile_id=? AND path=?", (p["id"], p["resume_path"]), one=True):
+            continue
+        src = Path(p["resume_path"])
+        path = src
+        if src.exists() and src.parent.name == str(p["id"]):          # old flat layout
+            day = datetime.fromtimestamp(src.stat().st_mtime).strftime("%Y-%m-%d")
+            dest = src.parent / day / src.name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), dest)
+            path = dest
+            x("UPDATE profiles SET resume_path=? WHERE id=?", (str(dest), p["id"]))
+        x("INSERT INTO resumes (profile_id, filename, path, text, uploaded_at) VALUES (?,?,?,?,?)",
+          (p["id"], src.name, str(path), p["resume_text"],
+           datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
+           if path.exists() else now()))
 
 
 def q(sql, args=(), one=False):
@@ -176,3 +208,6 @@ def get_profile(pid):
 
 def save_profile_data(pid, data: dict):
     x("UPDATE profiles SET data=? WHERE id=?", (json.dumps(data), pid))
+
+
+migrate_resumes()

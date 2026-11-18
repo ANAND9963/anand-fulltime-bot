@@ -2,6 +2,7 @@
 import json
 import shutil
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
@@ -80,10 +81,13 @@ RESUME_FIELDS = {"first_name", "last_name", "full_name", "email", "phone", "link
 @app.post("/api/profile/{pid}/resume")
 async def upload_resume(pid: int, file: UploadFile = File(...)):
     p = _profile(pid)
-    d = db.DATA / "resumes" / str(pid)
+    stamp = datetime.now()
+    d = db.DATA / "resumes" / str(pid) / stamp.strftime("%Y-%m-%d")      # one folder per upload date
     d.mkdir(parents=True, exist_ok=True)
     safe = Path(file.filename).name
     dest = d / safe
+    if dest.exists():                                                   # same file name again that day
+        dest = d / f"{dest.stem}_{stamp.strftime('%H%M%S')}{dest.suffix}"
     with open(dest, "wb") as fh:
         shutil.copyfileobj(file.file, fh)
     text = resume.extract_text(str(dest))
@@ -93,9 +97,42 @@ async def upload_resume(pid: int, file: UploadFile = File(...)):
         if k in RESUME_FIELDS or not data.get(k):
             data[k] = v
     db.x("UPDATE profiles SET resume_path=?, resume_text=? WHERE id=?", (str(dest), text, pid))
+    db.x("INSERT INTO resumes (profile_id, filename, path, text, uploaded_at) VALUES (?,?,?,?,?)",
+         (pid, safe, str(dest), text, db.now()))
     db.save_profile_data(pid, data)
-    db.log(pid, f"Resume uploaded: {safe} ({len(text)} chars), {len(parsed)} fields parsed")
+    db.log(pid, f"Resume uploaded: {dest.parent.name}/{dest.name} ({len(text)} chars), {len(parsed)} fields parsed")
     return {"ok": True, "parsed": parsed}
+
+
+@app.get("/api/profile/{pid}/resumes")
+def list_resumes(pid: int):
+    active = _profile(pid)["resume_path"]
+    rows = db.q("SELECT r.id, r.filename, r.path, r.uploaded_at, LENGTH(r.text) chars, "
+                "(SELECT COUNT(*) FROM jobs j WHERE j.profile_id=r.profile_id AND j.resume_used=r.path) used_in "
+                "FROM resumes r WHERE r.profile_id=? ORDER BY r.uploaded_at DESC, r.id DESC", (pid,))
+    for r in rows:
+        r["active"] = r["path"] == active
+        r["folder"] = Path(r["path"]).parent.name
+        r["exists"] = Path(r["path"]).exists()
+    return rows
+
+
+@app.post("/api/profile/{pid}/resumes/{rid}/use")
+def use_resume(pid: int, rid: int):
+    r = db.q("SELECT * FROM resumes WHERE id=? AND profile_id=?", (rid, pid), one=True)
+    if not r or not Path(r["path"]).exists():
+        raise HTTPException(404, "resume file not found")
+    db.x("UPDATE profiles SET resume_path=?, resume_text=? WHERE id=?", (r["path"], r["text"], pid))
+    db.log(pid, f"Now applying with resume {Path(r['path']).parent.name}/{r['filename']}")
+    return {"ok": True}
+
+
+@app.get("/api/profile/{pid}/resumes/{rid}/file")
+def resume_file(pid: int, rid: int):
+    r = db.q("SELECT * FROM resumes WHERE id=? AND profile_id=?", (rid, pid), one=True)
+    if not r or not Path(r["path"]).exists():
+        raise HTTPException(404, "resume file not found")
+    return FileResponse(r["path"], filename=r["filename"])
 
 
 # ---------------- settings ----------------
@@ -186,7 +223,7 @@ def del_avoid(pid: int, company: str):
 @app.get("/api/jobs/{pid}")
 def jobs(pid: int, status: str = "", q: str = "", limit: int = 500):
     sql = ("SELECT id, url, apply_url, title, company, location, source, ats, posted_at, sponsorship, score, status,"
-           " status_note, found_at, applied_at FROM jobs WHERE profile_id=?")
+           " status_note, found_at, applied_at, resume_used FROM jobs WHERE profile_id=?")
     args = [pid]
     if status:
         sql += " AND status IN (%s)" % ",".join("?" * len(status.split(",")))
