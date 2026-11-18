@@ -74,7 +74,11 @@ async function openBrowser() {
   await api(`/api/browser/${PID}/open`, {method: 'POST', body: {url}});
   toast('Opening the bot browser - sign in there once; it remembers');
 }
-async function stopWorker() { await api('/api/worker/stop', {method: 'POST'}); refresh(); }
+async function stopWorker() {
+  const r = await api('/api/worker/stop', {method: 'POST', body: {}});
+  toast(`Stopped - ${r.cleared} queued task(s) cleared` + (r.was_busy ? ', current job will stop at its next step' : ''));
+  refresh();
+}
 async function human(result) { await api('/api/worker/human', {method: 'POST', body: {result}}); refresh(); }
 
 // ---------- jobs ----------

@@ -17,6 +17,10 @@ class NeedsHuman(Exception):
     pass
 
 
+class Stopped(Exception):
+    """User pressed Stop: abandon the current job without marking it failed."""
+
+
 class ApplyContext:
     def __init__(self, pid, job, worker):
         self.pid = pid
@@ -42,6 +46,10 @@ class ApplyContext:
     def log(self, msg, level="info"):
         db.log(self.pid, f"[job {self.job['id']} {self.job.get('company')}] {msg}", level)
 
+    def check_stop(self):
+        if getattr(self.worker, "_stop", False):
+            raise Stopped()
+
 
 def record_pending(ctx, pending):
     seen = set()
@@ -61,6 +69,7 @@ def check_human(ctx, page):
 
 
 def submit_and_confirm(ctx, page, scope, submit_patterns):
+    ctx.check_stop()
     auto = db.truthy(ctx.settings.get("auto_submit"))
     if not auto:
         ctx.worker.wait_human(ctx, "Form is filled. Review it in the bot browser and click Submit yourself, then press "
@@ -213,6 +222,7 @@ def workday(ctx, page):
     last_title = None
     same = 0
     for step in range(12):
+        ctx.check_stop()
         wait_settle(page, 2500)
         check_human(ctx, page)
         title = ""

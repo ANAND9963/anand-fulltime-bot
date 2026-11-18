@@ -11,7 +11,7 @@ python -m venv .venv
 .venv\Scripts\python -m playwright install chromium
 ```
 
-Then double-click `start.bat` (or run `.venv\Scripts\python run.py`) and open http://127.0.0.1:8765.
+Then double-click `start.bat` (or run `.venv\Scripts\python run.py`) and open the address it prints (it picks a free port, normally http://127.0.0.1:8770).
 
 ## First run
 

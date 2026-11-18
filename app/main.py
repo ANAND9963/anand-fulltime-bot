@@ -26,6 +26,11 @@ async def no_cache_ui(request, call_next):
     return resp
 SECRETS = {"anthropic_api_key", "imap_password", "ats_account_password", "brave_api_key", "serper_api_key"}
 _search_running = {}
+_search_cancel = set()
+
+
+class SearchCancelled(Exception):
+    pass
 
 if not db.q("SELECT 1 FROM profiles"):
     db.x("INSERT INTO profiles (name, data, created_at) VALUES (?,?,?)", ("Me", "{}", db.now()))
@@ -318,10 +323,18 @@ def run_search(pid: int, body: dict = Body(default={})):
                   if u.strip()]:
             get_worker().enqueue("listing", pid, u)
     if ("ats" in sources or "web" in sources) and not _search_running.get(pid):
+        def progress(m):
+            if pid in _search_cancel:
+                raise SearchCancelled()
+            _search_running[pid] = m
+
         def go():
             _search_running[pid] = True
+            _search_cancel.discard(pid)
             try:
-                search.run_search(pid, sources, progress=lambda m: _search_running.__setitem__(pid, m))
+                search.run_search(pid, sources, progress=progress)
+            except SearchCancelled:
+                db.log(pid, "Search stopped by you")
             except Exception as e:
                 db.log(pid, f"search failed: {e}", "error")
             finally:
@@ -363,9 +376,17 @@ def human(body: dict = Body(...)):
 
 
 @app.post("/api/worker/stop")
-def stop():
-    get_worker().stop()
-    return {"ok": True}
+def stop(body: dict = Body(default={})):
+    """Stop everything: clear the apply queue, abandon the current job, cancel a running search."""
+    w = get_worker()
+    busy = w.state.get("busy")
+    queued = w.queue_size()
+    w.stop()
+    for pid, running in _search_running.items():
+        if running:
+            _search_cancel.add(pid)
+    db.log(0, f"Stop pressed: {queued} queued task(s) cleared" + (", current job is being stopped" if busy else ""))
+    return {"ok": True, "cleared": queued, "was_busy": bool(busy)}
 
 
 @app.post("/api/browser/{pid}/open")

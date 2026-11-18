@@ -176,6 +176,7 @@ class Filler:
         fields = self.scan(scope)
         filled = 0
         for f in fields:
+            self.ctx.check_stop()
             kind = f["kind"]
             loc = scope.locator(f'[data-jb-id="{f["id"]}"]').first
             label = clean_label(f.get("label"))

@@ -283,7 +283,7 @@ def web_search(settings, query, freshness_days=7):
     return urls
 
 
-def discover_boards(settings, keywords, needs_sponsorship, days):
+def discover_boards(settings, keywords, needs_sponsorship, days, progress=None):
     """Use internet search to find ATS boards that are currently hiring for these titles."""
     found = {k: set() for k in SEED}
     sites = ["boards.greenhouse.io", "job-boards.greenhouse.io", "jobs.lever.co", "jobs.ashbyhq.com", "myworkdayjobs.com"]
@@ -301,6 +301,8 @@ def discover_boards(settings, keywords, needs_sponsorship, days):
         queries = [f'site:{site} {kw}' for kw in keywords[:3] for site in sites]
         fetch = lambda qq: web_search(settings, qq, days)
     for qq in queries:
+        if progress:
+            progress(f"web search: {qq[:50]}")
         if True:
             for u in fetch(qq):
                 for name, pat in ATS_PATTERNS:
@@ -336,7 +338,7 @@ def run_search(pid, sources=("ats", "web"), progress=None):
 
     if "web" in sources:
         db.log(pid, "Searching the web for companies hiring now...")
-        found = discover_boards(settings, keywords, needs_sp, days)
+        found = discover_boards(settings, keywords, needs_sp, days, progress)
         for k, v in found.items():
             new = v - boards.get(k, set())
             if new:

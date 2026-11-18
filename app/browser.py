@@ -54,6 +54,8 @@ class Worker:
         ok = self._human.wait(timeout)
         self.state.update(waiting_human=False)
         res = self._human_result if ok else "timeout"
+        if self._stop:
+            raise apply.Stopped()
         if res == "submitted":
             raise Submitted()
         if res != "continue":
@@ -134,6 +136,9 @@ class Worker:
             db.x("UPDATE jobs SET status='applied', status_note='submitted by bot', applied_at=? WHERE id=?",
                  (db.now(), job_id))
             actx.log("APPLIED")
+        except apply.Stopped:
+            db.x("UPDATE jobs SET status='new', status_note='stopped by you' WHERE id=?", (job_id,))
+            actx.log("stopped by you - job put back to New")
         except Submitted:
             db.x("UPDATE jobs SET status='applied', status_note='submitted by you', applied_at=? WHERE id=?",
                  (db.now(), job_id))
@@ -165,6 +170,9 @@ class Worker:
         for _ in range(8):     # infinite scroll
             page.mouse.wheel(0, 4000)
             page.wait_for_timeout(1200)
+        if self._stop:
+            page.close()
+            return
         cards = page.evaluate(CARDS_JS)
         db.log(pid, f"{url}: found {len(cards)} job links")
         needs_sp = db.truthy(settings.get("needs_sponsorship"))
