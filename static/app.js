@@ -1,10 +1,18 @@
 let PID = Number(localStorage.getItem('pid') || 0);
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// on-page messages (browser popups are blocked in some embedded browsers)
+function toast(msg, kind = 'ok') {
+  let box = $('#toasts');
+  if (!box) { box = document.createElement('div'); box.id = 'toasts'; document.body.appendChild(box); }
+  const t = document.createElement('div'); t.className = 'toast ' + kind; t.textContent = msg;
+  box.appendChild(t); setTimeout(() => t.remove(), kind === 'bad' ? 7000 : 3500);
+}
+const errText = t => { try { return JSON.parse(t).detail || t; } catch { return t; } };
 async function api(path, opts = {}) {
   const r = await fetch(path, {headers: {'Content-Type': 'application/json'}, ...opts,
     body: opts.body && typeof opts.body !== 'string' && !(opts.body instanceof FormData) ? JSON.stringify(opts.body) : opts.body});
-  if (!r.ok) { const t = await r.text(); alert(t); throw new Error(t); }
+  if (!r.ok) { const t = await r.text(); toast(errText(t), 'bad'); throw new Error(t); }
   return r.json();
 }
 
@@ -24,11 +32,15 @@ async function loadProfiles() {
   $('#profileSel').innerHTML = ps.map(p => `<option value="${p.id}" ${p.id === PID ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
 }
 $('#profileSel').onchange = e => { PID = Number(e.target.value); localStorage.setItem('pid', PID); showTab('dash'); };
-$('#newProfile').onclick = async () => {
-  const name = prompt('Name for the new user profile?'); if (!name) return;
+$('#newProfile').onclick = () => { $('#newProfileBox').classList.toggle('hidden'); $('#newProfileName').focus(); };
+$('#newProfileName').onkeydown = e => { if (e.key === 'Enter') createProfile(); };
+async function createProfile() {
+  const name = $('#newProfileName').value.trim(); if (!name) return toast('Type a name first', 'bad');
+  $('#newProfileName').value = ''; $('#newProfileBox').classList.add('hidden');
   const r = await api('/api/profiles', {method: 'POST', body: {name}});
   PID = r.id; localStorage.setItem('pid', PID); await loadProfiles(); showTab('profile');
-};
+  toast(`Profile "${name}" created - upload their resume`);
+}
 
 // ---------- dashboard ----------
 async function refresh() {
@@ -54,12 +66,13 @@ async function runSearch() {
 }
 async function applyAll() {
   const r = await api(`/api/jobs/${PID}/apply`, {method: 'POST', body: {all_new: true, min_score: Number($('#minScore').value), limit: Number($('#maxApply').value)}});
-  alert(`${r.queued} jobs queued`); refresh();
+  toast(`${r.queued} jobs queued`); refresh();
 }
-async function scanEmail() { await api(`/api/email/${PID}/scan`, {method: 'POST', body: {days: 21}}); alert('Mailbox scan started (see Activity)'); }
+async function scanEmail() { await api(`/api/email/${PID}/scan`, {method: 'POST', body: {days: 21}}); toast('Mailbox scan started - see Activity'); }
 async function openBrowser() {
-  const url = prompt('URL to open in the bot browser (sign in there once; it remembers):', 'https://jobright.ai/jobs/recommend?from=homepage');
-  if (url) await api(`/api/browser/${PID}/open`, {method: 'POST', body: {url}});
+  const url = $('#openUrl').value.trim() || 'https://jobright.ai/jobs/recommend?from=homepage';
+  await api(`/api/browser/${PID}/open`, {method: 'POST', body: {url}});
+  toast('Opening the bot browser - sign in there once; it remembers');
 }
 async function stopWorker() { await api('/api/worker/stop', {method: 'POST'}); refresh(); }
 async function human(result) { await api('/api/worker/human', {method: 'POST', body: {result}}); refresh(); }
@@ -82,7 +95,7 @@ $('#jobStatus').onchange = loadJobs;
 $('#jobQ').oninput = () => { clearTimeout(window._jq); window._jq = setTimeout(loadJobs, 300); };
 $('#selAll').onchange = e => document.querySelectorAll('.sel').forEach(c => c.checked = e.target.checked);
 const selected = () => [...document.querySelectorAll('.sel:checked')].map(c => Number(c.value));
-async function applySelected() { const r = await api(`/api/jobs/${PID}/apply`, {method: 'POST', body: {ids: selected()}}); alert(`${r.queued} queued`); loadJobs(); }
+async function applySelected() { const r = await api(`/api/jobs/${PID}/apply`, {method: 'POST', body: {ids: selected()}}); toast(`${r.queued} queued`); loadJobs(); }
 async function markSelected(status) { await api(`/api/jobs/${PID}/status`, {method: 'POST', body: {ids: selected(), status}}); loadJobs(); }
 async function addJob() {
   const url = $('#addUrl').value.trim(); if (!url) return;
@@ -103,7 +116,7 @@ async function loadPending() {
 async function savePending(retry) {
   const answers = [...document.querySelectorAll('#pendingList .q')].map(d => ({question: d.dataset.q, answer: d.querySelector('input,textarea').value}));
   const r = await api(`/api/pending/${PID}`, {method: 'POST', body: {answers, retry}});
-  if (r.requeued) alert(`${r.requeued} waiting jobs re-queued`);
+  toast(r.requeued ? `Answers saved - ${r.requeued} waiting jobs re-queued` : 'Answers saved');
   loadPending(); refresh();
 }
 async function dropPending(id) { await api(`/api/pending/${PID}/${id}`, {method: 'DELETE'}); loadPending(); }
@@ -124,7 +137,7 @@ async function loadProfile() {
   PROF = await api(`/api/profile/${PID}`);
   $('#profName').value = PROF.name;
   $('#resumeInfo').textContent = PROF.resume_path ? `Current: ${PROF.resume_path.split(/[\\/]/).slice(-2).join('/')} (${PROF.resume_chars} chars)` : 'No resume yet';
-  loadResumes();
+  loadResumes(); setDirty(false);
   const keys = [...new Set([...PROF.fields, ...EXTRA, ...Object.keys(PROF.data)])];
   $('#profFields').innerHTML = keys.map(k => {
     const v = PROF.data[k] ?? '';
@@ -152,14 +165,20 @@ async function saveProfile() {
   document.querySelectorAll('#profFields [data-k]').forEach(i => { if (i.value.trim() || PROF.data[i.dataset.k] !== undefined) data[i.dataset.k] = i.value.trim(); });
   Object.keys(PROF.data).forEach(k => { if (!(k in data)) data[k] = PROF.data[k]; });
   await api(`/api/profile/${PID}`, {method: 'PUT', body: {name: $('#profName').value, data}});
+  PROF.data = data; setDirty(false);
   await loadProfiles();
+  toast('Profile saved');
 }
+function setDirty(d) { $('#profDirty').textContent = d ? 'Unsaved changes' : ''; }
+$('#profile').addEventListener('input', e => { if (e.target.closest('#profFields') || e.target.id === 'profName') setDirty(true); });
+document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && $('#profile').classList.contains('active')) { e.preventDefault(); saveProfile(); } });
 async function uploadResume() {
-  const f = $('#resumeFile').files[0]; if (!f) return alert('Choose a file');
+  const f = $('#resumeFile').files[0]; if (!f) return toast('Choose a resume file first', 'bad');
   const fd = new FormData(); fd.append('file', f);
   $('#resumeInfo').textContent = 'Parsing…';
   const r = await fetch(`/api/profile/${PID}/resume`, {method: 'POST', body: fd});
-  if (!r.ok) return alert(await r.text());
+  if (!r.ok) { $('#resumeInfo').textContent = ''; return toast(errText(await r.text()), 'bad'); }
+  toast('Resume uploaded and parsed');
   loadProfile();
 }
 
@@ -227,7 +246,7 @@ async function saveSettings() {
     if (i.type === 'password' && !i.value) return;
     body[i.dataset.k] = i.value;
   });
-  await api(`/api/settings/${PID}`, {method: 'PUT', body}); alert('Saved'); loadSettings();
+  await api(`/api/settings/${PID}`, {method: 'PUT', body}); toast('Settings saved'); loadSettings();
 }
 
 // ---------- boot ----------

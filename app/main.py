@@ -15,6 +15,15 @@ from .browser import get_worker
 app = FastAPI(title="Job Bot")
 STATIC = db.ROOT / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.middleware("http")
+async def no_cache_ui(request, call_next):
+    """Always revalidate the UI files so a code update shows up without a hard refresh."""
+    resp = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
 SECRETS = {"anthropic_api_key", "imap_password", "ats_account_password", "brave_api_key", "serper_api_key"}
 _search_running = {}
 
