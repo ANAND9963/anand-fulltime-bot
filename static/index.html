@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Bot</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">Job Bot</div>
+  <nav id="tabs">
+    <button data-tab="dash" class="active">Dashboard</button>
+    <button data-tab="jobs">Jobs</button>
+    <button data-tab="pending">Needs input <span id="pendingBadge" class="badge"></span></button>
+    <button data-tab="profile">Profile &amp; Resume</button>
+    <button data-tab="answers">Saved answers</button>
+    <button data-tab="avoid">Avoid companies</button>
+    <button data-tab="emails">Emails</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <div class="who">
+    <select id="profileSel"></select>
+    <button id="newProfile" class="ghost" title="Add another person">+ user</button>
+  </div>
+</header>
+
+<div id="humanBar" class="human hidden">
+  <span id="humanMsg"></span>
+  <button onclick="human('continue')">Continue</button>
+  <button onclick="human('submitted')">I submitted it</button>
+  <button class="ghost" onclick="human('skip')">Skip job</button>
+</div>
+
+<main>
+<!-- DASHBOARD -->
+<section id="dash" class="tab active">
+  <div class="stats" id="stats"></div>
+  <div class="card">
+    <h3>Run</h3>
+    <div class="row wrap">
+      <label><input type="checkbox" id="srcAts" checked> Company career APIs (Greenhouse / Lever / Ashby / Workday)</label>
+      <label><input type="checkbox" id="srcWeb" checked> Internet search for new openings</label>
+      <label><input type="checkbox" id="srcList" checked> Listing sites (jobright.ai etc.)</label>
+    </div>
+    <div class="row wrap">
+      <button onclick="runSearch()">1. Find jobs</button>
+      <button onclick="applyAll()">2. Apply to all new matches</button>
+      <label>min match <input type="number" id="minScore" step="0.05" min="0" max="1" value="0.15" style="width:70px"></label>
+      <label>max <input type="number" id="maxApply" value="25" style="width:60px"></label>
+      <button class="ghost" onclick="scanEmail()">3. Read mailbox</button>
+      <button class="ghost" onclick="openBrowser()">Open bot browser (log in to sites)</button>
+      <button class="danger" onclick="stopWorker()">Stop</button>
+    </div>
+    <div class="muted" id="workerState"></div>
+  </div>
+  <div class="card">
+    <h3>Activity</h3>
+    <div id="logs" class="logs"></div>
+  </div>
+</section>
+
+<!-- JOBS -->
+<section id="jobs" class="tab">
+  <div class="row wrap">
+    <select id="jobStatus">
+      <option value="">All</option>
+      <option value="new" selected>New</option>
+      <option value="queued,applying">In progress</option>
+      <option value="needs_input,needs_human">Waiting on you</option>
+      <option value="applied">Applied</option>
+      <option value="failed">Failed / manual</option>
+      <option value="skipped">Skipped</option>
+    </select>
+    <input id="jobQ" placeholder="filter title / company / location">
+    <button onclick="applySelected()">Apply to selected</button>
+    <button class="ghost" onclick="markSelected('skipped')">Skip</button>
+    <button class="ghost" onclick="markSelected('applied')">Mark applied</button>
+    <button class="ghost" onclick="markSelected('new')">Reset to new</button>
+    <span class="spacer"></span>
+    <input id="addUrl" placeholder="paste any job URL (Workday, Greenhouse, jobright...)">
+    <button onclick="addJob()">Add &amp; apply</button>
+  </div>
+  <table class="grid">
+    <thead><tr><th><input type="checkbox" id="selAll"></th><th>Title</th><th>Company</th><th>Location</th><th>ATS</th>
+      <th>Visa</th><th>Match</th><th>Posted</th><th>Status</th></tr></thead>
+    <tbody id="jobRows"></tbody>
+  </table>
+</section>
+
+<!-- PENDING -->
+<section id="pending" class="tab">
+  <p class="muted">Questions the bot could not answer from your resume or saved answers. Answer once &mdash; it's saved and reused
+    for every future application. When the list is empty the waiting jobs are retried automatically.</p>
+  <div id="pendingList"></div>
+  <div class="row"><button onclick="savePending(false)">Save answers</button>
+    <button class="ghost" onclick="savePending(true)">Save &amp; retry waiting jobs now</button></div>
+</section>
+
+<!-- PROFILE -->
+<section id="profile" class="tab">
+  <div class="card">
+    <h3>Resume</h3>
+    <div class="row wrap">
+      <input type="file" id="resumeFile" accept=".pdf,.docx,.txt">
+      <button onclick="uploadResume()">Upload &amp; parse</button>
+      <span class="muted" id="resumeInfo"></span>
+    </div>
+    <p class="muted">Upload a new resume any time; resume facts refresh but your visa / EEO / salary answers are kept.</p>
+  </div>
+  <div class="card">
+    <h3>Profile <span class="muted">(used to fill forms)</span></h3>
+    <div class="row"><label>Profile name <input id="profName"></label></div>
+    <div id="profFields" class="fields"></div>
+    <div class="row"><input id="newFieldKey" placeholder="add custom field (e.g. referral_source)"><button class="ghost" onclick="addField()">Add field</button></div>
+    <button onclick="saveProfile()">Save profile</button>
+  </div>
+</section>
+
+<!-- ANSWERS -->
+<section id="answers" class="tab">
+  <div class="row wrap">
+    <input id="ansQ" placeholder="question" style="flex:2"><input id="ansA" placeholder="answer" style="flex:2">
+    <button onclick="addAnswer()">Add</button>
+    <input id="ansFilter" placeholder="filter">
+  </div>
+  <table class="grid"><thead><tr><th>Question</th><th>Answer</th><th>From</th><th></th></tr></thead><tbody id="ansRows"></tbody></table>
+</section>
+
+<!-- AVOID -->
+<section id="avoid" class="tab">
+  <div class="card">
+    <h3>Never apply to these companies</h3>
+    <textarea id="avoidInput" rows="3" placeholder="Comma or newline separated, e.g. current employer, Revature, ..."></textarea>
+    <button onclick="addAvoid()">Add</button>
+    <div id="avoidList" class="chips"></div>
+  </div>
+</section>
+
+<!-- EMAILS -->
+<section id="emails" class="tab">
+  <div class="row"><button onclick="scanEmail()">Scan mailbox now</button><span class="muted">Reads application confirmations, rejections and interview invites; marks matching jobs as applied.</span></div>
+  <table class="grid"><thead><tr><th>Date</th><th>Kind</th><th>Company</th><th>Subject</th><th>Job</th></tr></thead><tbody id="emailRows"></tbody></table>
+</section>
+
+<!-- SETTINGS -->
+<section id="settings" class="tab">
+  <div id="settingsForm" class="fields"></div>
+  <button onclick="saveSettings()">Save settings</button>
+</section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

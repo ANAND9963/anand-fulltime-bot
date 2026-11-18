@@ -1,0 +1,20 @@
+<!doctype html><html><body>
+<h1>Software Engineer - Acme</h1>
+<form id="f" onsubmit="event.preventDefault(); if(!document.getElementById('fav').value){document.getElementById('err').textContent='This field is required';return;} document.body.innerHTML='<h2>Thank you for applying!</h2><pre id=dump></pre>'; document.getElementById('dump').textContent=JSON.stringify(window.__vals);">
+<div class="field"><label for="fn">First Name *</label><input id="fn" required></div>
+<div class="field"><label for="ln">Last Name *</label><input id="ln" required></div>
+<div class="field"><label for="em">Email *</label><input id="em" type="email" required></div>
+<div class="field"><label for="ph">Phone</label><input id="ph" type="tel"></div>
+<div class="field"><label>LinkedIn Profile</label><input name="urls[LinkedIn]"></div>
+<div class="field"><label for="cv">Resume/CV *</label><input id="cv" type="file" required></div>
+<fieldset><legend>Will you now or in the future require visa sponsorship? *</legend>
+  <label><input type="radio" name="sp" value="y" required> Yes</label><label><input type="radio" name="sp" value="n"> No</label></fieldset>
+<div class="field"><label for="hear">How did you hear about us? *</label><select id="hear" required><option value="">Select...</option><option>LinkedIn</option><option>Company website</option><option>Referral</option></select></div>
+<div class="field"><div class="label">Are you legally authorized to work in the United States? *</div><div><button type="button" onclick="this.classList.add('selected')">Yes</button><button type="button" onclick="this.classList.add('selected')">No</button></div></div>
+<div class="field"><label for="fav">What is your favorite programming paradigm? *</label><input id="fav" required></div>
+<div class="field"><label><input type="checkbox" id="agree" required> I agree to the privacy policy *</label></div>
+<div id="err"></div>
+<button type="submit">Submit Application</button>
+</form>
+<script>document.getElementById('f').addEventListener('submit',()=>{window.__vals=[...document.querySelectorAll('input,select')].map(e=>[e.id||e.name,e.type==='file'?(e.files[0]&&e.files[0].name):(e.type==='radio'||e.type==='checkbox'?e.checked:e.value)]);},true);</script>
+</body></html>
