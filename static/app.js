@@ -9,9 +9,19 @@ function toast(msg, kind = 'ok') {
   box.appendChild(t); setTimeout(() => t.remove(), kind === 'bad' ? 7000 : 3500);
 }
 const errText = t => { try { return JSON.parse(t).detail || t; } catch { return t; } };
+function setOffline(off) {
+  const bar = $('#offlineBar'); if (!bar) return;
+  const was = !bar.classList.contains('hidden');
+  bar.classList.toggle('hidden', !off);
+  if (was && !off) { toast('Reconnected to the bot'); showTab(document.querySelector('#tabs button.active')?.dataset.tab || 'dash'); }
+}
 async function api(path, opts = {}) {
-  const r = await fetch(path, {headers: {'Content-Type': 'application/json'}, ...opts,
+  let r;
+  try {
+    r = await fetch(path, {headers: {'Content-Type': 'application/json'}, ...opts,
     body: opts.body && typeof opts.body !== 'string' && !(opts.body instanceof FormData) ? JSON.stringify(opts.body) : opts.body});
+  } catch (e) { setOffline(true); throw e; }
+  setOffline(false);
   if (!r.ok) { const t = await r.text(); toast(errText(t), 'bad'); throw new Error(t); }
   return r.json();
 }
@@ -256,8 +266,20 @@ async function saveSettings() {
 }
 
 // ---------- boot ----------
-(async () => {
-  await loadProfiles(); localStorage.setItem('pid', PID);
-  refresh();
-  setInterval(() => { if ($('#dash').classList.contains('active') || !$('#humanBar').classList.contains('hidden')) refresh(); else api(`/api/status/${PID}`).then(s => { $('#humanBar').classList.toggle('hidden', !s.worker.waiting_human); $('#humanMsg').textContent = s.worker.message; }); }, 3000);
-})();
+let booted = false;
+async function boot() {
+  try {
+    await loadProfiles(); localStorage.setItem('pid', PID);
+    booted = true;
+    refresh().catch(() => {});
+  } catch { /* bot not running yet: the offline bar is showing; retry below */ }
+}
+async function poll() {
+  if (!booted) return boot();
+  if ($('#dash').classList.contains('active') || !$('#humanBar').classList.contains('hidden')) return refresh();
+  const s = await api(`/api/status/${PID}`);
+  $('#humanBar').classList.toggle('hidden', !s.worker.waiting_human);
+  $('#humanMsg').textContent = s.worker.message;
+}
+boot();
+setInterval(() => poll().catch(() => {}), 3000);

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Job Bot</title>
-<link rel="stylesheet" href="/static/style.css?v=5">
+<link rel="stylesheet" href="/static/style.css?v=6">
 </head>
 <body>
 <header>
@@ -27,6 +27,10 @@
   </div>
 </header>
 
+<div id="offlineBar" class="offline hidden">
+  The bot is not running, so nothing on this page will work. Double-click <b>start.bat</b> in the FullTimeJobbot folder
+  (keep its window open), then this page reconnects by itself.
+</div>
 <div id="humanBar" class="human hidden">
   <span id="humanMsg"></span>
   <button onclick="human('continue')">Continue</button>
@@ -155,6 +159,6 @@
   <button onclick="saveSettings()">Save settings</button>
 </section>
 </main>
-<script src="/static/app.js?v=5"></script>
+<script src="/static/app.js?v=6"></script>
 </body>
 </html>

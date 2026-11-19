@@ -61,3 +61,4 @@ table.grid { width: 100%; border-collapse: collapse; background: var(--panel); b
 .toast.bad { background: var(--bad); }
 .dirty { color: var(--warn); font-weight: 600; font-size: 13px; }
 .who { align-items: center; flex-wrap: wrap; }
+.offline { position: sticky; top: 52px; z-index: 6; background: var(--bad); color: #fff; padding: 12px 16px; font-weight: 500; }
