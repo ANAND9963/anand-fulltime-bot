@@ -1,0 +1,30 @@
+<!doctype html><html><body>
+<header><input role="combobox" aria-label="Search by title, skill, or company" id="globalsearch" required></header>
+<h1>Java Developer - Acme</h1>
+<button id="ea" onclick="document.getElementById('dlg').style.display='block'">Easy Apply</button>
+<div id="dlg" role="dialog" aria-modal="true" style="display:none;position:fixed;top:40px;left:40px;background:#fff;border:1px solid #888;padding:20px">
+  <div class="step" id="s1"><h3>Contact info</h3>
+    <label for="ph">Mobile phone number *</label><input id="ph" required>
+    <label for="em">Email address *</label><input id="em" required>
+    <button onclick="go(2)">Next</button></div>
+  <div class="step" id="s2" style="display:none"><h3>Additional questions</h3>
+    <label for="yrs">How many years of work experience do you have with Java? *</label><input id="yrs" type="number" required>
+    <label for="cv">Upload resume</label><input id="cv" type="file">
+    <button onclick="go(3)">Review</button></div>
+  <div class="step" id="s3" style="display:none"><h3>Review your application</h3>
+    <button onclick="submitApp()">Submit application</button></div>
+  <div id="err" style="color:red"></div>
+</div>
+<script>
+function go(n){
+  const cur=[...document.querySelectorAll('.step')].find(s=>s.style.display!=='none');
+  const empty=[...cur.querySelectorAll('input[required]')].filter(i=>!i.value);
+  if(empty.length){document.getElementById('err').textContent='Please enter a valid answer';return;}
+  document.getElementById('err').textContent='';
+  document.querySelectorAll('.step').forEach(s=>s.style.display='none'); document.getElementById('s'+n).style.display='block';
+}
+function submitApp(){
+  window.__result={ph:ph.value,em:em.value,yrs:yrs.value,cv:cv.files[0]&&cv.files[0].name,search:globalsearch.value};
+  document.getElementById('dlg').innerHTML='<h3>Your application was sent to Acme</h3><button onclick="this.parentNode.style.display=\'none\'">Done</button><pre id=r>'+JSON.stringify(window.__result)+'</pre>';
+}
+</script></body></html>

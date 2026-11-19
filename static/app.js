@@ -245,7 +245,9 @@ const SET_HELP = {
   serper_api_key: 'optional: serper.dev key (Google results) for better web search',
   greenhouse_boards: 'extra Greenhouse board tokens (boards.greenhouse.io/<token>)', lever_companies: 'extra Lever company ids',
   ashby_orgs: 'extra Ashby org ids', workday_sites: 'tenant|wdN|site e.g. nvidia|wd5|NVIDIAExternalCareerSite',
-  listing_urls: 'one per line: jobright.ai / LinkedIn / Built In search pages to scrape (log in once via Open bot browser)',
+  job_sites: 'job boards searched with your keywords in the bot browser: jobright, linkedin, dice, ziprecruiter, monster (remove any you do not want). Sign in to each once via Open bot browser',
+  max_per_site_per_day: 'most applications per job board per day (keeps your LinkedIn/Dice accounts safe); 0 = no limit',
+  listing_urls: 'optional extra search pages to scrape, one per line (e.g. a saved LinkedIn search URL)',
 };
 async function loadSettings() {
   const s = await api(`/api/settings/${PID}`);

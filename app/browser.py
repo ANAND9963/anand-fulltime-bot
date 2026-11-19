@@ -7,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 
 from playwright.sync_api import sync_playwright
 
-from . import apply, chrome, db, search
-from .filler import page_text, wait_settle
+from . import apply, chrome, db, search, sites
+from .filler import captcha_visible, page_text, wait_settle
 
 
 class Worker:
@@ -74,6 +74,16 @@ class Worker:
             return True
         except Exception:
             return False
+
+    def wait_for_user(self, pid, msg, timeout=600):
+        """Yellow bar in the UI: ask the user to do something in the bot Chrome. True = Continue pressed."""
+        db.log(pid, "WAITING FOR YOU: " + msg, "warn")
+        self.state.update(waiting_human=True, message=msg)
+        self._human.clear()
+        self._human_result = None
+        ok = self._human.wait(timeout)
+        self.state.update(waiting_human=False)
+        return ok and self._human_result == "continue" and not self._stop
 
     def _context(self, pid):
         """Attach to this user's real Chrome (started if needed); falls back to a Playwright browser."""
@@ -176,6 +186,9 @@ class Worker:
             db.x("UPDATE jobs SET status='applied', status_note='submitted by bot', applied_at=? WHERE id=?",
                  (db.now(), job_id))
             actx.log("APPLIED")
+        except apply.Deferred as e:
+            db.x("UPDATE jobs SET status='new', status_note=? WHERE id=?", (str(e), job_id))
+            actx.log(str(e))
         except apply.Stopped:
             db.x("UPDATE jobs SET status='new', status_note='stopped by you' WHERE id=?", (job_id,))
             actx.log("stopped by you - job put back to New")
@@ -195,36 +208,57 @@ class Worker:
             self._close_own_tabs(page)
 
     def _scrape_listing(self, pid, url):
-        """Read job cards from a (logged-in) listing site like jobright.ai, LinkedIn, Indeed, Built In."""
+        """Read job cards from a search/listing page in your logged-in bot Chrome
+        (jobright, LinkedIn, Dice, ZipRecruiter, Monster, or any other page you add)."""
         settings = db.get_settings(pid)
         profile = db.get_profile(pid)["data"]
+        site = sites.site_of(url)
+        label = sites.SITES[site]["label"] if site else url[:60]
         page = self._page(pid)
-        page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        wait_settle(page, 4000)
-        if re.search(r"sign in|log in|login", page.url, re.I):
-            db.log(pid, f"{url}: looks like you need to log in. Use 'Open browser' to sign in once, then scrape again.", "warn")
-        for _ in range(8):     # infinite scroll
-            page.mouse.wheel(0, 4000)
-            page.wait_for_timeout(1200)
-        if self._stop:
-            page.close()
-            return
-        cards = page.evaluate(CARDS_JS)
-        db.log(pid, f"{url}: found {len(cards)} job links")
-        needs_sp = db.truthy(settings.get("needs_sponsorship"))
-        exclude = [k.strip().lower() for k in settings.get("exclude_title_words", "").split(",") if k.strip()]
-        added = 0
-        for c in cards:
-            title, company = guess_title_company(c)
-            if any(re.search(r"\b" + re.escape(e) + r"\b", (title or "").lower()) for e in exclude):
-                continue
-            j = dict(url=c["href"], apply_url=c["href"], title=title, company=company, location=c.get("location"),
-                     description=c["text"], ats=search.detect_ats(c["href"]))
-            src = "listing" if j["ats"] in ("jobright", "linkedin", "other") else "api"
-            if search.save_job(pid, j, src, [], exclude, [], None, needs_sp, profile, force=True):
-                added += 1
-        db.log(pid, f"{url}: {added} new jobs saved")
-        page.close()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            wait_settle(page, 4000)
+            if re.search(r"/(login|signin|sign-in|authwall|checkpoint|uas/login)", page.url, re.I):
+                db.log(pid, f"{label}: you are not signed in. Click 'Open bot browser', sign in to {label} once, "
+                            "then run Find jobs again.", "warn")
+                return
+            if captcha_or_block(page):
+                page.bring_to_front()
+                if not self.wait_for_user(pid, f"{label} is showing a robot check. Complete it in the bot Chrome window, "
+                                               "then press Continue (or Skip to leave this site out)"):
+                    db.log(pid, f"{label}: skipped (robot check not completed)", "warn")
+                    return
+                wait_settle(page, 3000)
+                if captcha_or_block(page):
+                    db.log(pid, f"{label}: still blocked by the robot check, skipping this search", "warn")
+                    return
+            for _ in range(8):                      # load more results (window and inner job lists)
+                if self._stop:
+                    return
+                page.evaluate(SCROLL_JS)
+                page.wait_for_timeout(1100)
+            cards = page.evaluate(CARDS_JS, sites.SITES[site]["job_link"] if site else None)
+            needs_sp = db.truthy(settings.get("needs_sponsorship"))
+            exclude = [k.strip().lower() for k in settings.get("exclude_title_words", "").split(",") if k.strip()]
+            added = 0
+            for c in cards:
+                href = sites.canonical(c["href"]) or c["href"]
+                title, company = guess_title_company(c)
+                if any(re.search(r"" + re.escape(e) + r"", (title or "").lower()) for e in exclude):
+                    continue
+                j = dict(url=href, apply_url=href, title=title, company=company, location=c.get("location"),
+                         description=c["text"], ats=search.detect_ats(href))
+                src = "listing" if j["ats"] in sites.BOARDS else "api"
+                if search.already_applied(pid, company, title):
+                    continue
+                if search.save_job(pid, j, src, [], exclude, [], None, needs_sp, profile, force=True):
+                    added += 1
+            db.log(pid, f"{label}: {len(cards)} postings on the page, {added} new saved")
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
 
 
 class Submitted(Exception):
@@ -232,16 +266,19 @@ class Submitted(Exception):
 
 
 CARDS_JS = r"""
-() => {
+(siteRe) => {
   const txt = el => (el ? (el.innerText || '') : '').trim();
+  const site = siteRe ? new RegExp(siteRe) : null;
   const ats = /greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|icims\.com|smartrecruiters\.com|workable\.com|jobvite\.com/;
   const jobish = /\/jobs?\/(info|view|detail|details)?\/?[\w-]{4,}|\/job\/|\/careers?\/|\/positions?\/|currentJobId=/i;
   const seen = new Set(); const out = [];
   for (const a of document.querySelectorAll('a[href]')) {
     const href = a.href.split('#')[0];
     if (seen.has(href)) continue;
-    if (!(ats.test(href) || (jobish.test(href) && !/\/jobs\/(recommend|search|collections?)\b/.test(href)))) continue;
-    let card = a; for (let i = 0; i < 6 && card.parentElement; i++) { if (txt(card).length > 60) break; card = card.parentElement; }
+    const ok = site ? (site.test(href) || ats.test(href))
+                    : (ats.test(href) || (jobish.test(href) && !/\/jobs\/(recommend|search|collections?)\b/.test(href)));
+    if (!ok) continue;
+    let card = a; for (let i = 0; i < 7 && card.parentElement; i++) { if (txt(card).length > 60) break; card = card.parentElement; }
     const t = txt(card);
     if (t.length < 15) continue;
     seen.add(href);
@@ -250,6 +287,32 @@ CARDS_JS = r"""
   return out.slice(0, 300);
 }
 """
+
+# scroll the window and any scrollable list (LinkedIn keeps results in an inner pane)
+SCROLL_JS = r"""
+() => {
+  window.scrollBy(0, 3000);
+  for (const el of document.querySelectorAll('ul, div, section, main')) {
+    const cs = getComputedStyle(el);
+    if (/(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 50 && el.querySelector('a[href]'))
+      el.scrollTop += 2500;
+  }
+  const more = [...document.querySelectorAll('button')].find(b => /^(see more jobs|show more|load more)/i.test((b.innerText || '').trim()));
+  if (more) more.click();
+}
+"""
+
+
+def captcha_or_block(page):
+    """Robot checks (Cloudflare, DataDome, reCAPTCHA...). The bot never tries to get past these itself."""
+    if captcha_visible(page):
+        return True
+    if any(k in (f.url or "") for f in page.frames for k in ("captcha-delivery.com", "challenges.cloudflare.com")):
+        return True
+    t = (page.title() + " " + page_text(page)[:2000]).lower()
+    return any(k in t for k in ("verify you are human", "are you a robot", "unusual traffic", "press & hold",
+                                "checking your browser", "access denied", "performing security verification",
+                                "just a moment", "security check"))
 
 
 def guess_title_company(c):

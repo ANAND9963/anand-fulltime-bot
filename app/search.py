@@ -39,7 +39,8 @@ def detect_ats(url: str) -> str:
                       ("workday", "myworkdayjobs.com"), ("icims", "icims.com"), ("smartrecruiters", "smartrecruiters.com"),
                       ("workable", "workable.com"), ("jobvite", "jobvite.com"), ("bamboohr", "bamboohr.com"),
                       ("taleo", "taleo.net"), ("successfactors", "successfactors"), ("oracle", "oraclecloud.com"),
-                      ("linkedin", "linkedin.com"), ("jobright", "jobright.ai"), ("rippling", "rippling.com"),
+                      ("linkedin", "linkedin.com"), ("jobright", "jobright.ai"), ("dice", "dice.com"),
+                      ("ziprecruiter", "ziprecruiter.com"), ("monster", "monster.com"), ("rippling", "rippling.com"),
                       ("dover", "dover.com"), ("wellfound", "wellfound.com")]:
         if key in u:
             return name
@@ -338,6 +339,18 @@ def discover_boards(settings, keywords, needs_sponsorship, days, progress=None):
                         elif m.group(1) not in ("embed", "jobs", "v1"):
                             found[name].add(m.group(1))
     return found
+
+
+def search_terms(pid):
+    """(keywords, locations, days) from Settings + the profile's target titles."""
+    settings = db.get_settings(pid)
+    profile = (db.get_profile(pid) or {}).get("data", {})
+    keywords = [k.strip() for k in settings.get("search_keywords", "").split(",") if k.strip()]
+    for k in (profile.get("target_titles") or "").split(","):
+        if k.strip() and k.strip().lower() not in [x.lower() for x in keywords]:
+            keywords.append(k.strip())
+    locations = [l.strip() for l in settings.get("search_locations", "").split(",") if l.strip()]
+    return keywords or ["Software Engineer"], locations, int(settings.get("max_job_age_days") or 7)
 
 
 def run_search(pid, sources=("ats", "web"), progress=None):

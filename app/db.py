@@ -178,7 +178,9 @@ DEFAULT_SETTINGS = {
     "ashby_orgs": "",
     "workday_sites": "",                 # tenant|wdN|site, comma separated
     "exclude_title_words": "intern, internship, director, manager, principal, staff, lead, clearance, phd",
-    "listing_urls": "https://jobright.ai/jobs/recommend?from=homepage",
+    "job_sites": "jobright, linkedin, dice, ziprecruiter, monster",   # boards searched in the bot Chrome
+    "max_per_site_per_day": "25",        # cap per board per day (protects your LinkedIn/Dice accounts)
+    "listing_urls": "",                  # extra search/listing pages to scrape, one per line
 }
 
 

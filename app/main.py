@@ -9,7 +9,7 @@ from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import answers, chrome, db, email_reader, resume, search
+from . import answers, chrome, db, email_reader, resume, search, sites
 from .browser import get_worker
 
 app = FastAPI(title="Job Bot")
@@ -294,12 +294,12 @@ def set_status(pid: int, body: dict = Body(...)):
 
 @app.post("/api/jobs/{pid}/add")
 def add_job(pid: int, body: dict = Body(...)):
-    url = body["url"].strip()
+    url = sites.canonical(body["url"].strip()) or body["url"].strip()
     ats = search.detect_ats(url)
     j = dict(url=url, apply_url=url, title=body.get("title") or "(added manually)", company=body.get("company") or "",
              ats=ats)
     profile = _profile(pid)["data"]
-    src = "listing" if ats in ("jobright", "linkedin", "other") else "manual"
+    src = "listing" if ats in sites.BOARDS else "manual"
     search.save_job(pid, j, src, [], [], [], None, False, profile, force=True)
     row = db.q("SELECT id FROM jobs WHERE profile_id=? AND url=?", (pid, url), one=True)
     if body.get("apply_now") and row:
@@ -319,9 +319,13 @@ def clear_jobs(pid: int, status: str = "new,skipped"):
 def run_search(pid: int, body: dict = Body(default={})):
     sources = body.get("sources") or ["ats", "web", "listings"]
     if "listings" in sources:
-        for u in [u.strip() for u in db.get_settings(pid).get("listing_urls", "").splitlines() + body.get("extra_urls", [])
-                  if u.strip()]:
+        settings = db.get_settings(pid)
+        keywords, locations, days = search.search_terms(pid)
+        urls = sites.search_urls(body.get("sites") or sites.enabled_sites(settings), keywords, locations, days)
+        urls += [u.strip() for u in settings.get("listing_urls", "").splitlines() + body.get("extra_urls", []) if u.strip()]
+        for u in dict.fromkeys(urls):                       # keep order, drop duplicates
             get_worker().enqueue("listing", pid, u)
+        db.log(pid, f"Searching {len(dict.fromkeys(urls))} job-board pages in the bot browser")
     if ("ats" in sources or "web" in sources) and not _search_running.get(pid):
         def progress(m):
             if pid in _search_cancel:

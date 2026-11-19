@@ -10,7 +10,8 @@ import time
 from . import answers
 
 SCAN_JS = r"""
-() => {
+(rootSel) => {
+  const root = (rootSel && [...document.querySelectorAll(rootSel)].filter(e => e.getClientRects().length > 0).pop()) || document;
   const vis = el => { if (!el) return false; const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
       return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
   const txt = el => (el ? (el.innerText || el.textContent || '') : '').replace(/\s+/g, ' ').trim();
@@ -47,7 +48,7 @@ SCAN_JS = r"""
     return el.value || '';
   };
   const out = []; const groups = {};
-  document.querySelectorAll('input, textarea, select, button[aria-haspopup="listbox"]').forEach(el => {
+  root.querySelectorAll('input, textarea, select, button[aria-haspopup="listbox"]').forEach(el => {
     const type = (el.getAttribute('type') || el.tagName).toLowerCase();
     if (el.disabled || el.readOnly && type !== 'file') return;
     // hidden validation proxies used by react-select etc.
@@ -104,7 +105,7 @@ SCAN_JS = r"""
               options: g.els.map(optLabel), option_ids: g.els.map(tag), filled: g.els.some(e => e.checked), id: tag(first)});
   }
   // Yes/No style button groups (Ashby and others)
-  document.querySelectorAll('div, fieldset').forEach(div => {
+  root.querySelectorAll('div, fieldset').forEach(div => {
     const btns = [...div.querySelectorAll(':scope > button, :scope > div > button')].filter(b => vis(b) && b.type !== 'submit');
     if (btns.length < 2 || btns.length > 6) return;
     const texts = btns.map(txt);
@@ -123,6 +124,7 @@ SCAN_JS = r"""
 """
 
 SUCCESS_RE = re.compile(r"thank(s| you)[^.]{0,30}(for applying|for your application|for your interest|application)|"
+                        r"your application (was|has been) (sent|submitted)|application sent|you('ve| have) (successfully )?applied|"
                         r"application (has been |was )?(successfully )?(submitted|received|sent)|"
                         r"we('ve| have) received your application|successfully (submitted|applied)|"
                         r"your application is (complete|in)", re.I)
@@ -137,9 +139,10 @@ class Filler:
     def __init__(self, ctx):
         self.ctx = ctx  # ApplyContext from apply.py
 
-    def scan(self, scope):
+    def scan(self, scope, root=None):
+        """root: CSS selector of a container (e.g. an Easy Apply popup) to limit the scan to."""
         try:
-            return scope.evaluate(SCAN_JS)
+            return scope.evaluate(SCAN_JS, root)
         except Exception:
             return []
 
@@ -171,9 +174,9 @@ class Filler:
                 self.ctx.log(f"Claude answered '{label[:60]}' -> '{ans[:60]}' (saved, editable in Answers)")
         return ans
 
-    def fill(self, scope, page, job, pending: list):
+    def fill(self, scope, page, job, pending: list, root=None):
         """Fill every field we can in this scope. Unanswerable required fields are appended to pending."""
-        fields = self.scan(scope)
+        fields = self.scan(scope, root)
         filled = 0
         for f in fields:
             self.ctx.check_stop()
@@ -283,6 +286,8 @@ class Filler:
 
 def page_text(scope):
     try:
+        if hasattr(scope, "nth"):                 # a Locator (e.g. an Easy Apply popup)
+            return scope.inner_text(timeout=5000)
         return scope.locator("body").inner_text(timeout=5000)
     except Exception:
         return ""
@@ -304,7 +309,7 @@ def best_form_scope(page):
 def captcha_visible(page) -> bool:
     for fr in page.frames:
         u = fr.url or ""
-        if ("recaptcha" in u and "bframe" in u) or "hcaptcha.com" in u and "challenge" in u or "challenges.cloudflare" in u:
+        if ("recaptcha" in u and "bframe" in u) or ("hcaptcha.com" in u and "challenge" in u) or                 "challenges.cloudflare" in u or "captcha-delivery.com" in u:
             try:
                 if fr.frame_element().is_visible():
                     return True

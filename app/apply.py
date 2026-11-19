@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import answers, db, email_reader, search
+from . import answers, db, email_reader, search, sites
 from .filler import (SUCCESS_RE, Filler, best_form_scope, captcha_visible, click_first, page_text,
                      visible_errors, wait_settle)
 
@@ -276,20 +276,131 @@ def resolve_external(ctx, page):
     return target
 
 
+POPUP = '[role="dialog"], [aria-modal="true"], .artdeco-modal, .jobs-easy-apply-modal'
+NEXT = [r"^\s*next\s*$", r"^\s*continue( to next step)?\s*$", r"^\s*review( your application)?\s*$",
+        r"^\s*save (and|&) continue\s*$", r"^\s*continue to review\s*$", r"^\s*proceed\s*$"]
+FINAL = [r"^\s*submit( your)?( application)?\s*$", r"^\s*send application\s*$", r"^\s*apply now\s*$"]
+
+
+class Deferred(Exception):
+    """Not applied now (e.g. daily limit); the job stays New."""
+
+
+def _visible_popup(page):
+    loc = page.locator(POPUP)
+    for i in range(loc.count() - 1, -1, -1):
+        if loc.nth(i).is_visible():
+            return loc.nth(i)
+    return None
+
+
+def _has_button(scope, patterns):
+    for pat in patterns:
+        b = scope.locator("button, [role=button], input[type=submit]").filter(has_text=re.compile(pat, re.I))
+        for k in range(min(b.count(), 6)):
+            if b.nth(k).is_visible() and b.nth(k).is_enabled():
+                return True
+    return False
+
+
+def _applied_marker(page):
+    """'Applied' badge/button that boards show after a one-click application."""
+    m = page.locator("button, span, div").filter(has_text=re.compile(r"^\s*(applied|application submitted|"
+                                                                      r"you applied|applied \d+ \w+ ago)\s*$", re.I))
+    return any(m.nth(k).is_visible() for k in range(min(m.count(), 5)))
+
+
+def check_daily_limit(ctx, site):
+    cap = int(ctx.settings.get("max_per_site_per_day") or 0)
+    if cap <= 0:
+        return
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    n = db.q("SELECT COUNT(*) n FROM jobs WHERE profile_id=? AND status='applied' AND applied_at LIKE ? AND url LIKE ?",
+             (ctx.pid, today + "%", f"%{sites.SITES[site]['domain']}%"), one=True)["n"]
+    if n >= cap:
+        raise Deferred(f"daily limit reached for {sites.SITES[site]['label']} ({n}/{cap}); will try again tomorrow")
+
+
+def board_apply(ctx, page, site):
+    """Use the board's own quick-apply (LinkedIn Easy Apply, Dice Easy Apply, ZipRecruiter 1-Click, Monster Quick
+    Apply). Returns (True, page) when applied here, (False, page) when the board sent us to the company's site,
+    (None, page) when there is no quick-apply button (caller then follows the normal Apply link)."""
+    s = sites.SITES[site]
+    if not s["quick_apply"]:
+        return None, page
+    wait_settle(page, 2500)
+    if _applied_marker(page) and not _has_button(page, s["quick_apply"]):
+        return True, page                                   # already applied on this board earlier
+    before = set(page.context.pages)
+    if not click_first(page, s["quick_apply"]):
+        return None, page
+    wait_settle(page, 3000)
+    new_pages = [p for p in page.context.pages if p not in before]
+    if new_pages:
+        page = new_pages[-1]
+        wait_settle(page, 2500)
+    if sites.site_of(page.url) != site:                    # it was an external "Apply" after all
+        return False, page
+    if re.search(r"/(login|signin|sign-in|authwall|checkpoint)", page.url, re.I):
+        raise NeedsHuman(f"sign in to {s['label']} in the bot browser, then press Continue")
+
+    filler = Filler(ctx)
+    last_sig, same = None, 0
+    for step in range(15):
+        ctx.check_stop()
+        check_human(ctx, page)
+        popup = _visible_popup(page)
+        scope = popup or page
+        text = page_text(page)
+        if SUCCESS_RE.search(text) or _applied_marker(page):
+            click_first(page, [r"^\s*(done|close|dismiss|not now)\s*$"], timeout=2000)
+            return True, page
+        pending = []
+        filler.fill(page, page, ctx.job, pending, root=POPUP if popup else None)
+        if pending:
+            record_pending(ctx, pending)
+        sig = (page.url, (scope.inner_text(timeout=3000) if popup else text)[:400])
+        same = same + 1 if sig == last_sig else 0
+        last_sig = sig
+        if same >= 2:
+            errs = visible_errors(scope)
+            raise NeedsHuman(f"stuck on a {s['label']} apply step: {'; '.join(errs)[:200] or 'no Next/Submit button'}")
+        if _has_button(scope, FINAL):
+            submit_and_confirm(ctx, page, scope, FINAL)
+            click_first(page, [r"^\s*(done|close|dismiss|not now)\s*$"], timeout=2000)
+            return True, page
+        if not click_first(scope, NEXT):
+            if SUCCESS_RE.search(page_text(page)) or _applied_marker(page):
+                return True, page
+            raise NeedsHuman(f"no Next/Submit button on the {s['label']} application")
+        page.wait_for_timeout(1500)
+    raise NeedsHuman(f"{s['label']} application took too many steps")
+
+
 def apply_job(ctx, page):
     job = ctx.job
     url = job.get("apply_url") or job["url"]
     ats = search.detect_ats(url)
     page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    if ats in ("jobright", "linkedin", "other") and job.get("source") == "listing":
-        if ats == "linkedin" and page.locator("button").filter(has_text=re.compile("easy apply", re.I)).count():
-            raise NeedsHuman("LinkedIn Easy Apply is not automated - apply in the browser, then press 'I submitted it'")
-        page = resolve_external(ctx, page)
+    site = sites.site_of(url)
+    if job.get("source") == "listing" and (site or ats == "other"):
+        handled, target = None, page
+        if site:
+            check_daily_limit(ctx, site)
+            if db.truthy(ctx.settings.get("needs_sponsorship")) and search.sponsorship_of(page_text(page)) == "no":
+                db.x("UPDATE jobs SET status='skipped', status_note='posting says no visa sponsorship' WHERE id=?",
+                     (job["id"],))
+                return "skipped"
+            handled, target = board_apply(ctx, page, site)
+            if handled:
+                ctx.log(f"applied through {sites.SITES[site]['label']}")
+                return True
+        page = target if handled is False else resolve_external(ctx, page)
         ats = search.detect_ats(page.url)
         ctx.log(f"external application page: {page.url[:120]} ({ats})")
         db.x("UPDATE jobs SET apply_url=?, ats=? WHERE id=?", (page.url, ats, job["id"]))
-        if ats == "jobright":
-            raise NeedsHuman("could not find the external apply link on jobright - open it and press Continue")
+        if sites.site_of(page.url):
+            raise NeedsHuman("could not find the company's application page from the job board - open it and press Continue")
     # description check (sponsorship / avoid) now that we are on the real page
     text = page_text(page)
     if db.truthy(ctx.settings.get("needs_sponsorship")) and search.sponsorship_of(text) == "no":
