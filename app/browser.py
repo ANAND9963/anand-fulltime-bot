@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from playwright.sync_api import sync_playwright
 
-from . import apply, db, search
+from . import apply, chrome, db, search
 from .filler import page_text, wait_settle
 
 
@@ -20,6 +20,8 @@ class Worker:
         self._stop = False
         self.ctx = None
         self.ctx_pid = None
+        self.browser = None
+        self._owned = set()
         threading.Thread(target=self._run, daemon=True).start()
 
     # ---------- public API (called from web threads) ----------
@@ -62,35 +64,66 @@ class Worker:
             raise apply.NeedsHuman(msg if res == "timeout" else "skipped by you")
         db.x("UPDATE jobs SET status='applying', status_note=NULL WHERE id=?", (actx.job["id"],))
 
-    def _context(self, pid):
-        if self.ctx and self.ctx_pid == pid:
-            try:
-                self.ctx.pages  # still alive?
-                return self.ctx
-            except Exception:
-                self.ctx = None
-        if self.ctx:
-            try:
-                self.ctx.close()
-            except Exception:
-                pass
-        headless = db.truthy(db.get_settings(pid).get("headless"))
-        udir = str(db.DATA / "browser" / f"profile_{pid}")
-        kw = dict(user_data_dir=udir, headless=headless, no_viewport=True, args=["--start-maximized"])
+    def _alive(self):
+        if not self.ctx:
+            return False
         try:
-            self.ctx = self.pw.chromium.launch_persistent_context(channel="chrome", **kw)
+            if self.browser is not None and not self.browser.is_connected():
+                return False
+            self.ctx.pages
+            return True
         except Exception:
-            self.ctx = self.pw.chromium.launch_persistent_context(**kw)
+            return False
+
+    def _context(self, pid):
+        """Attach to this user's real Chrome (started if needed); falls back to a Playwright browser."""
+        if self.ctx_pid == pid and self._alive() and (self.browser is None or chrome.is_running(pid)):
+            return self.ctx
+        self._detach()
+        headless = db.truthy(db.get_settings(pid).get("headless"))
+        if chrome.ensure_running(pid, headless=headless):
+            self.browser = self.pw.chromium.connect_over_cdp(f"http://127.0.0.1:{chrome.port_for(pid)}")
+            self.ctx = self.browser.contexts[0] if self.browser.contexts else self.browser.new_context()
+        else:
+            db.log(pid, "Chrome/Edge not found - using the built-in browser (Google sign-in may not work there). "
+                        "Set chrome_path in Settings if Chrome is installed somewhere else.", "warn")
+            self.browser = None
+            self.ctx = self.pw.chromium.launch_persistent_context(
+                user_data_dir=str(chrome.profile_dir(pid)), headless=headless, no_viewport=True)
         self.ctx_pid = pid
         return self.ctx
 
-    def _page(self, pid):
-        ctx = self._context(pid)
+    def _detach(self):
+        """Disconnect from Chrome without closing it (logins and tabs stay)."""
         try:
-            return ctx.new_page()
+            if self.browser is not None:
+                self.browser.close()        # for a CDP connection this only disconnects
+            elif self.ctx is not None:
+                self.ctx.close()
         except Exception:
-            self.ctx = None
-            return self._context(pid).new_page()
+            pass
+        self.browser = None
+        self.ctx = None
+
+    def _page(self, pid):
+        """A new tab for the bot. Tabs the bot opens are closed afterwards; your own tabs are never touched."""
+        for attempt in range(2):
+            ctx = self._context(pid)
+            try:
+                self._owned = set(ctx.pages)
+                page = ctx.new_page()
+                return page
+            except Exception:
+                self._detach()
+        raise RuntimeError("could not open a browser tab")
+
+    def _close_own_tabs(self, page):
+        try:
+            for p in list(page.context.pages):
+                if p not in self._owned:
+                    p.close()
+        except Exception:
+            pass
 
     def _run(self):
         with sync_playwright() as pw:
@@ -103,7 +136,8 @@ class Worker:
                     if kind == "apply":
                         self._apply(pid, arg)
                     elif kind == "open":
-                        self._page(pid).goto(arg)
+                        if not chrome.ensure_running(pid, arg):
+                            self._page(pid).goto(arg)
                     elif kind == "listing":
                         self._scrape_listing(pid, arg)
                 except Exception as e:
@@ -152,11 +186,7 @@ class Worker:
             db.x("UPDATE jobs SET status='failed', status_note=? WHERE id=?", (str(e)[:300], job_id))
             actx.log(f"error: {e}\n{traceback.format_exc()[-600:]}", "error")
         finally:
-            for p in list(page.context.pages)[1:]:   # keep the first tab so the window stays open
-                try:
-                    p.close()
-                except Exception:
-                    pass
+            self._close_own_tabs(page)
 
     def _scrape_listing(self, pid, url):
         """Read job cards from a (logged-in) listing site like jobright.ai, LinkedIn, Indeed, Built In."""

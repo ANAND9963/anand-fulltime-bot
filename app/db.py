@@ -161,6 +161,7 @@ DEFAULT_SETTINGS = {
     "llm_model": "claude-opus-5-5",
     "auto_submit": "true",
     "headless": "false",
+    "chrome_path": "",                   # optional: full path to chrome.exe / msedge.exe if not auto-detected
     "needs_sponsorship": "true",
     "max_job_age_days": "7",
     "min_score": "0.15",

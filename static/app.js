@@ -71,8 +71,9 @@ async function applyAll() {
 async function scanEmail() { await api(`/api/email/${PID}/scan`, {method: 'POST', body: {days: 21}}); toast('Mailbox scan started - see Activity'); }
 async function openBrowser() {
   const url = $('#openUrl').value.trim() || 'https://jobright.ai/jobs/recommend?from=homepage';
-  await api(`/api/browser/${PID}/open`, {method: 'POST', body: {url}});
-  toast('Opening the bot browser - sign in there once; it remembers');
+  const r = await api(`/api/browser/${PID}/open`, {method: 'POST', body: {url}});
+  toast(r.browser === 'built-in' ? 'Opening the built-in bot browser - sign in there once'
+    : `Opened in the bot's own ${r.browser.replace('.exe', '')} window - sign in there once; it stays signed in`);
 }
 async function stopWorker() {
   const r = await api('/api/worker/stop', {method: 'POST', body: {}});
@@ -223,6 +224,7 @@ const SET_HELP = {
   anthropic_api_key: 'Claude API key - parses resumes and answers new questions (optional but recommended)',
   llm_model: 'Claude model id', auto_submit: 'true = submit automatically; false = fill and wait for you to click Submit',
   headless: 'false = you can watch the browser (needed for logins/CAPTCHAs)',
+  chrome_path: 'leave empty to auto-detect Chrome/Edge; otherwise the full path to chrome.exe',
   needs_sponsorship: 'true = skip postings that say they do not sponsor visas',
   max_job_age_days: 'only jobs posted within N days', min_score: 'default minimum match score (0-1)',
   imap_host: 'e.g. imap.gmail.com / outlook.office365.com', imap_user: 'mailbox used on applications',

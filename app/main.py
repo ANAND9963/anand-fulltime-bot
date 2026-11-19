@@ -9,7 +9,7 @@ from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import answers, db, email_reader, resume, search
+from . import answers, chrome, db, email_reader, resume, search
 from .browser import get_worker
 
 app = FastAPI(title="Job Bot")
@@ -391,5 +391,9 @@ def stop(body: dict = Body(default={})):
 
 @app.post("/api/browser/{pid}/open")
 def open_browser(pid: int, body: dict = Body(default={})):
-    get_worker().enqueue("open", pid, body.get("url") or "https://jobright.ai/jobs/recommend?from=homepage")
-    return {"ok": True}
+    """Open the user's bot Chrome right away (not through the apply queue) so they can sign in."""
+    url = body.get("url") or "https://jobright.ai/jobs/recommend?from=homepage"
+    if chrome.ensure_running(pid, url):
+        return {"ok": True, "browser": Path(chrome.find_browser()).name}
+    get_worker().enqueue("open", pid, url)          # no Chrome/Edge installed: use the built-in browser
+    return {"ok": True, "browser": "built-in"}

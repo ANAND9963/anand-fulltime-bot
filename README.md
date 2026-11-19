@@ -28,7 +28,9 @@ Then double-click `start.bat` (or run `.venv\Scripts\python run.py`) and open th
    - `auto_submit`: `true` submits automatically; `false` fills the form and waits for you to click Submit.
    - `search_keywords`, `search_locations`, `max_job_age_days`, `exclude_title_words`, `needs_sponsorship`.
 3. **Dashboard → Open bot browser** and log in to jobright.ai (and any other listing site in
-   `listing_urls`). The bot browser keeps the login.
+   `listing_urls`). This is your normal Chrome (or Edge) with its own separate "bot" profile per user, so Google
+   sign-in works and logins are kept after you close it. You can keep using that window; the bot opens its own
+   tabs and closes only those. Your everyday Chrome profile is never touched.
 4. **Avoid companies**: companies to never apply to (your current employer, for example).
 
 ## Daily use
