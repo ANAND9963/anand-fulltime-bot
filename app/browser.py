@@ -153,6 +153,12 @@ class Worker:
         if search.is_avoided(pid, job["company"]):
             db.x("UPDATE jobs SET status='skipped', status_note='company is on avoid list' WHERE id=?", (job_id,))
             return
+        dup = search.already_applied(pid, job["company"], job["title"], exclude_id=job_id)
+        if dup:
+            db.x("UPDATE jobs SET status='skipped', status_note=? WHERE id=?",
+                 (f"already applied to {dup['company']} - {dup['title']} ({(dup['applied_at'] or '')[:10]})", job_id))
+            db.log(pid, f"[job {job_id}] skipped: already applied to {dup['company']} - {dup['title']}")
+            return
         prof = db.get_profile(pid)
         if not prof.get("resume_path"):
             db.log(pid, "Upload a resume first", "error")

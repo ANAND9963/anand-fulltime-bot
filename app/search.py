@@ -96,6 +96,31 @@ def _tokens(s):
     return set(re.findall(r"[a-z0-9+#]+", (s or "").lower()))
 
 
+SENIORITY = {"sr", "senior", "jr", "junior", "i", "ii", "iii", "iv", "1", "2", "3", "4", "l2", "l3", "l4", "mid", "level"}
+
+
+def title_similar(a: str, b: str) -> bool:
+    """Same role ignoring punctuation and seniority words (e.g. 'Software Engineer II, Backend' ~ 'Software Engineer - Backend')."""
+    ta, tb = _tokens(a) - SENIORITY, _tokens(b) - SENIORITY
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / min(len(ta), len(tb)) >= 0.75
+
+
+def already_applied(pid, company, title, exclude_id=None):
+    """An 'applied' job (by the bot, by you, or found in email) at the same company with a similar title."""
+    nc = norm_company(company)
+    if len(nc) < 3:
+        return None
+    for j in db.q("SELECT id, company, title, applied_at FROM jobs WHERE profile_id=? AND status='applied' AND id != ?",
+                  (pid, exclude_id or -1)):
+        jc = norm_company(j["company"])
+        if len(jc) >= 3 and (jc == nc or jc.startswith(nc) or nc.startswith(jc)):
+            if not title or not j["title"] or j["title"] == "(from email)" or title_similar(title, j["title"]):
+                return j
+    return None
+
+
 def title_matches(title: str, keywords: list, exclude: list) -> bool:
     t = (title or "").lower()
     if any(e and re.search(r"\b" + re.escape(e) + r"\b", t) for e in exclude):
