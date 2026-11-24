@@ -162,6 +162,8 @@ DEFAULT_SETTINGS = {
     "auto_submit": "true",
     "headless": "false",
     "chrome_path": "",                   # optional: full path to chrome.exe / msedge.exe if not auto-detected
+    "online_url": "",                    # your Netlify site, e.g. https://your-jobbot.netlify.app
+    "online_password": "",               # the APP_PASSWORD you set on Netlify
     "needs_sponsorship": "true",
     "max_job_age_days": "7",
     "min_score": "0.15",

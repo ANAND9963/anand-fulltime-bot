@@ -1,0 +1,18 @@
+{
+  "name": "jobbot-online",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "netlify dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.11",
+    "@netlify/functions": "^6.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "netlify-cli": "^26.2.0",
+    "typescript": "^5.9.3"
+  }
+}

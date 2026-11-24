@@ -3,3 +3,7 @@ __pycache__/
 data/
 *.pyc
 .claude/settings.local.json
+node_modules/
+.netlify/
+.env
+deno.lock

@@ -4,7 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Job Bot</title>
-<link rel="stylesheet" href="/static/style.css?v=7">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+<meta name="theme-color" content="#2f6fed">
+<link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
 <header>
@@ -19,6 +23,7 @@
     <button data-tab="emails">Emails</button>
     <button data-tab="settings">Settings</button>
   </nav>
+  <span id="workerBadge" class="badge-state"></span>
   <div class="who">
     <select id="profileSel"></select>
     <button id="newProfile" class="ghost" title="Add another person">+ user</button>
@@ -159,6 +164,6 @@
   <button onclick="saveSettings()">Save settings</button>
 </section>
 </main>
-<script src="/static/app.js?v=7"></script>
+<script src="/static/app.js?v=9"></script>
 </body>
 </html>

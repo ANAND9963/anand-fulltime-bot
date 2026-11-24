@@ -8,7 +8,15 @@ function toast(msg, kind = 'ok') {
   const t = document.createElement('div'); t.className = 'toast ' + kind; t.textContent = msg;
   box.appendChild(t); setTimeout(() => t.remove(), kind === 'bad' ? 7000 : 3500);
 }
-const errText = t => { try { return JSON.parse(t).detail || t; } catch { return t; } };
+const errText = t => { try { const j = JSON.parse(t); return j.detail || j.error || j.message || t; } catch { return t; } };
+const ls = {get: k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } },
+            set: (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch {} }};
+// ONLINE = true when this page is served by the Netlify site (the bot itself runs on your PC)
+let ONLINE = false, WORKER_SEEN = 0;
+const authHeaders = () => ONLINE ? {'x-app-password': ls.get('jobbot_pw')} : {};
+class Queued extends Error {}
+window.addEventListener('unhandledrejection', e => { if (e.reason instanceof Queued) e.preventDefault(); });
+
 function setOffline(off) {
   const bar = $('#offlineBar'); if (!bar) return;
   const was = !bar.classList.contains('hidden');
@@ -17,14 +25,63 @@ function setOffline(off) {
 }
 async function api(path, opts = {}) {
   let r;
+  const isForm = opts.body instanceof FormData;
   try {
-    r = await fetch(path, {headers: {'Content-Type': 'application/json'}, ...opts,
-    body: opts.body && typeof opts.body !== 'string' && !(opts.body instanceof FormData) ? JSON.stringify(opts.body) : opts.body});
+    r = await fetch(path, {...opts, headers: {...(isForm ? {} : {'Content-Type': 'application/json'}), ...authHeaders()},
+      body: opts.body && typeof opts.body !== 'string' && !isForm ? JSON.stringify(opts.body) : opts.body});
   } catch (e) { setOffline(true); throw e; }
-  setOffline(false);
+  if (!ONLINE) setOffline(false);
+  if (r.status === 401 && ONLINE) { showLogin('Please enter your password.'); throw new Queued('login'); }
+  if (r.status === 202) {           // online: the PC worker didn't answer in time; the change is queued
+    const j = await r.json().catch(() => ({}));
+    toast(j.message || 'Sent to your PC - it runs when the PC worker is online');
+    throw new Queued('queued');
+  }
   if (!r.ok) { const t = await r.text(); toast(errText(t), 'bad'); throw new Error(t); }
   return r.json();
 }
+
+// ---------- online: password + PC worker status ----------
+function showLogin(msg) {
+  let box = $('#loginBox');
+  if (!box) {
+    box = document.createElement('div'); box.id = 'loginBox'; box.className = 'login';
+    box.innerHTML = `<form class="card"><h3>Job Bot</h3><p class="muted" id="loginMsg"></p>
+      <input type="password" id="loginPw" placeholder="Password (APP_PASSWORD on Netlify)" autocomplete="current-password">
+      <button>Sign in</button></form>`;
+    document.body.appendChild(box);
+    box.querySelector('form').onsubmit = async e => {
+      e.preventDefault();
+      const pw = $('#loginPw').value;
+      const s = await fetch('/api/_auth', {headers: {'x-app-password': pw}}).then(r => r.json()).catch(() => ({}));
+      if (s.authed) { ls.set('jobbot_pw', pw); box.remove(); booted = false; boot(); }
+      else $('#loginMsg').textContent = 'Wrong password.';
+    };
+  }
+  $('#loginMsg').textContent = msg || '';
+  $('#loginPw').focus();
+}
+async function checkMeta() {
+  const m = await fetch('/api/_meta', {headers: authHeaders()}).then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!m) return;
+  ONLINE = !!m.online;
+  const badge = $('#workerBadge');
+  if (!ONLINE) {                     // on the PC: show whether the online dashboard is connected
+    const r = m.relay || {};
+    badge.textContent = r.connected ? 'Online dashboard: connected' : '';
+    badge.className = 'badge-state ok';
+    return;
+  }
+  WORKER_SEEN = m.worker_last_seen;
+  const ago = Math.round((m.now - m.worker_last_seen) / 1000);
+  const up = m.worker_last_seen && ago < 90;
+  badge.textContent = up ? 'PC worker: online' : (m.worker_last_seen ? `PC worker: offline (seen ${fmtAgo(ago)} ago)` : 'PC worker: never connected');
+  badge.className = 'badge-state ' + (up ? 'ok' : 'bad');
+  $('#offlineBar').classList.toggle('hidden', up);
+  $('#offlineBar').innerHTML = up ? '' : `Your PC worker is offline${m.worker_last_seen ? ` (last seen ${fmtAgo(ago)} ago)` : ''}.
+    You can still look around and make changes; they are queued and run when you start <b>start.bat</b> on your PC.`;
+}
+const fmtAgo = s => s < 90 ? `${s}s` : s < 5400 ? `${Math.round(s / 60)} min` : s < 172800 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} days`;
 
 // ---------- tabs ----------
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
@@ -165,10 +222,16 @@ async function loadResumes() {
   const rows = await api(`/api/profile/${PID}/resumes`);
   $('#resumeRows').innerHTML = rows.map(r => `<tr>
     <td>${esc(r.folder)}<div class="note">${esc(new Date(r.uploaded_at).toLocaleTimeString())}</div></td>
-    <td>${r.exists ? `<a href="/api/profile/${PID}/resumes/${r.id}/file" target="_blank">${esc(r.filename)}</a>` : esc(r.filename) + ' <span class="note">(file missing)</span>'}</td>
+    <td>${r.exists ? `<a href="#" onclick="downloadResume(${r.id}, this.textContent); return false">${esc(r.filename)}</a>` : esc(r.filename) + ' <span class="note">(file missing)</span>'}</td>
     <td>${r.used_in} application${r.used_in === 1 ? '' : 's'}</td>
     <td>${r.active ? '<span class="pill applied">in use</span>' : r.exists ? `<button class="ghost" onclick="useResume(${r.id})">Use this one</button>` : ''}</td></tr>`).join('')
     || '<tr><td colspan="4" class="muted">No resumes uploaded yet.</td></tr>';
+}
+async function downloadResume(id, name) {
+  const r = await fetch(`/api/profile/${PID}/resumes/${id}/file`, {headers: authHeaders()});
+  if (!r.ok) return toast(ONLINE ? 'Your PC worker must be online to download a resume' : 'File not found', 'bad');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 async function useResume(id) { await api(`/api/profile/${PID}/resumes/${id}/use`, {method: 'POST'}); loadProfile(); }
 function addField() {
@@ -191,8 +254,8 @@ async function uploadResume() {
   const f = $('#resumeFile').files[0]; if (!f) return toast('Choose a resume file first', 'bad');
   const fd = new FormData(); fd.append('file', f);
   $('#resumeInfo').textContent = 'Parsing…';
-  const r = await fetch(`/api/profile/${PID}/resume`, {method: 'POST', body: fd});
-  if (!r.ok) { $('#resumeInfo').textContent = ''; return toast(errText(await r.text()), 'bad'); }
+  try { await api(`/api/profile/${PID}/resume`, {method: 'POST', body: fd}); }
+  catch (e) { $('#resumeInfo').textContent = e instanceof Queued ? 'Sent to your PC - it will be parsed there' : ''; return; }
   toast('Resume uploaded and parsed');
   loadProfile();
 }
@@ -235,6 +298,8 @@ const SET_HELP = {
   llm_model: 'Claude model id', auto_submit: 'true = submit automatically; false = fill and wait for you to click Submit',
   headless: 'false = you can watch the browser (needed for logins/CAPTCHAs)',
   chrome_path: 'leave empty to auto-detect Chrome/Edge; otherwise the full path to chrome.exe',
+  online_url: 'your Netlify dashboard address, e.g. https://anand-jobbot.netlify.app (this PC then works for the online dashboard)',
+  online_password: 'the APP_PASSWORD you set on Netlify',
   needs_sponsorship: 'true = skip postings that say they do not sponsor visas',
   max_job_age_days: 'only jobs posted within N days', min_score: 'default minimum match score (0-1)',
   imap_host: 'e.g. imap.gmail.com / outlook.office365.com', imap_user: 'mailbox used on applications',
@@ -253,6 +318,8 @@ async function loadSettings() {
   const s = await api(`/api/settings/${PID}`);
   $('#settingsForm').innerHTML = Object.entries(s).map(([k, v]) => {
     const secret = /key|password/.test(k);
+    if (ONLINE && (secret || ['online_url', 'chrome_path'].includes(k)))
+      return `<label>${k.replace(/_/g, ' ')} <span class="help">${v === '__SET__' ? 'saved' : 'not set'} - change this on your PC (it never leaves your PC)</span><input disabled value="${v === '__SET__' ? '••••••' : esc(v)}"></label>`;
     const input = k === 'listing_urls' ? `<textarea data-k="${k}" rows="3">${esc(v)}</textarea>`
       : `<input data-k="${k}" ${secret ? 'type="password" placeholder="' + (v === '__SET__' ? '(saved - leave blank to keep)' : '') + '"' : ''} value="${secret ? '' : esc(v)}">`;
     return `<label>${k.replace(/_/g, ' ')} <span class="help">${SET_HELP[k] || ''}</span>${input}</label>`;
@@ -268,16 +335,25 @@ async function saveSettings() {
 }
 
 // ---------- boot ----------
-let booted = false;
+let booted = false, lastMeta = 0;
 async function boot() {
   try {
+    // /api/_auth only exists on the online (Netlify) site
+    const a = await fetch('/api/_auth', {headers: {'x-app-password': ls.get('jobbot_pw')}})
+      .then(r => r.ok ? r.json() : null).catch(() => null);
+    if (a && 'authed' in a) {
+      ONLINE = true;
+      if (!a.authed) return showLogin(ls.get('jobbot_pw') ? 'Wrong password.' : '');
+    }
+    await checkMeta(); lastMeta = Date.now();
     await loadProfiles(); localStorage.setItem('pid', PID);
     booted = true;
     refresh().catch(() => {});
   } catch { /* bot not running yet: the offline bar is showing; retry below */ }
 }
 async function poll() {
-  if (!booted) return boot();
+  if (!booted) return $('#loginBox') ? null : boot();
+  if (Date.now() - lastMeta > 15000) { lastMeta = Date.now(); checkMeta(); }
   if ($('#dash').classList.contains('active') || !$('#humanBar').classList.contains('hidden')) return refresh();
   const s = await api(`/api/status/${PID}`);
   $('#humanBar').classList.toggle('hidden', !s.worker.waiting_human);
@@ -285,3 +361,5 @@ async function poll() {
 }
 boot();
 setInterval(() => poll().catch(() => {}), 3000);
+if ('serviceWorker' in navigator && location.protocol === 'https:')
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));

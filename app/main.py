@@ -9,7 +9,7 @@ from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import answers, chrome, db, email_reader, resume, search, sites
+from . import answers, chrome, db, email_reader, relay, resume, search, sites
 from .browser import get_worker
 
 app = FastAPI(title="Job Bot")
@@ -24,7 +24,8 @@ async def no_cache_ui(request, call_next):
     if request.url.path == "/" or request.url.path.startswith("/static/"):
         resp.headers["Cache-Control"] = "no-cache"
     return resp
-SECRETS = {"anthropic_api_key", "imap_password", "ats_account_password", "brave_api_key", "serper_api_key"}
+SECRETS = {"anthropic_api_key", "imap_password", "ats_account_password", "brave_api_key", "serper_api_key",
+           "online_password"}
 _search_running = {}
 _search_cancel = set()
 
@@ -401,3 +402,13 @@ def open_browser(pid: int, body: dict = Body(default={})):
         return {"ok": True, "browser": Path(chrome.find_browser()).name}
     get_worker().enqueue("open", pid, url)          # no Chrome/Edge installed: use the built-in browser
     return {"ok": True, "browser": "built-in"}
+
+
+# ---------------- online dashboard (Netlify) ----------------
+@app.get("/api/_meta")
+def meta():
+    """The PC answers this itself; online the Netlify function answers it (online: true)."""
+    return {"online": False, "relay": relay.state}
+
+
+relay.start(app)

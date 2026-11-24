@@ -1,0 +1,16 @@
+# Online dashboard for Job Bot (the bot itself runs on your PC: start.bat).
+[build]
+  publish = "static"
+
+[functions]
+  node_bundler = "esbuild"
+
+# the UI asks for /static/app.js etc. (same paths as on the PC)
+[[redirects]]
+  from = "/static/*"
+  to = "/:splat"
+  status = 200
+
+[dev]
+  framework = "#static"
+  port = 8888

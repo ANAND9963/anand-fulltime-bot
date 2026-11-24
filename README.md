@@ -44,6 +44,44 @@ Dashboard → **Find jobs** → review the Jobs tab → **Apply to all new match
 - **Read mailbox**: records application confirmations, rejections and interview invites, and marks jobs as applied.
 - **+ user**: a separate profile for someone else, with their own resume, answers, settings, avoid list and browser logins.
 
+## Use it online (phone or any computer)
+
+The dashboard can run on **Netlify** (like PrepHub) while the applying keeps running on your PC, in your real
+Chrome where you are signed in to LinkedIn, Dice and the rest. Everything you do online (apply, answer questions,
+upload a resume, find jobs, read mail) is sent to your PC, which runs it and sends the result back. Pages you've
+opened before still load when the PC is off; changes you make then are queued and run when the PC is back on.
+Passwords and API keys never go online: they can only be changed on the PC.
+
+```
+phone / browser --password--> Netlify (dashboard + cached data + queue)  <--polls--  your PC (start.bat)
+```
+
+### 1. Deploy to Netlify (one time)
+
+Easiest: https://app.netlify.com -> **Add new project -> Import an existing project -> GitHub** -> pick
+`anand-fulltime-bot`. Leave the build command empty and the publish directory `static`. Every `git push` then
+redeploys.
+
+Or from this folder: `npm install`, `npx netlify login`, `npx netlify init`, `npx netlify deploy --prod`.
+
+### 2. Set the password (required)
+
+Netlify -> your site -> **Project configuration -> Environment variables -> Add a variable**: key `APP_PASSWORD`,
+value a long password of your choice. Then **Deploys -> Trigger deploy**. The site refuses to work without it,
+because your resume and application history are stored there.
+
+### 3. Connect your PC
+
+In the bot on your PC (http://127.0.0.1:8770) -> **Settings**: set `online url` to your site address
+(e.g. `https://anand-jobbot.netlify.app`) and `online password` to the same `APP_PASSWORD`. Save. The header
+shows "Online dashboard: connected", and the online site shows "PC worker: online".
+
+Keep `start.bat` running (minimized is fine) whenever you want the bot to apply. On a phone, open the site and use
+"Add to Home screen" to install it like an app.
+
+Test the online site locally: create `.env` with `APP_PASSWORD=something`, run `npx netlify dev`, and point
+`online url` at http://localhost:8888.
+
 ## How it works
 
 | Part | File |
@@ -55,6 +93,7 @@ Dashboard → **Find jobs** → review the Jobs tab → **Apply to all new match
 | Answer memory and rules | `app/answers.py` |
 | IMAP: codes, verification links, applied/rejected/interview tracking | `app/email_reader.py` |
 | API + UI | `app/main.py`, `static/` |
+| Online dashboard relay (Netlify function / PC side) | `netlify/functions/api.mts`, `app/relay.py` |
 
 Data (database, resumes, browser profiles) lives in `data/` and is not committed.
 
