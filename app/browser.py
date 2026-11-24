@@ -131,7 +131,7 @@ class Worker:
         try:
             for p in list(page.context.pages):
                 if p not in self._owned:
-                    p.close()
+                    safe_close(p)
         except Exception:
             pass
 
@@ -255,10 +255,19 @@ class Worker:
                     added += 1
             db.log(pid, f"{label}: {len(cards)} postings on the page, {added} new saved")
         finally:
-            try:
-                page.close()
-            except Exception:
-                pass
+            safe_close(page)
+
+
+def safe_close(page):
+    """Close a bot tab without closing Chrome: closing the last tab quits Chrome (and your sign-in in progress),
+    so the last tab is turned into a blank tab instead."""
+    try:
+        if len([p for p in page.context.pages if not p.is_closed()]) <= 1:
+            page.goto("about:blank")
+        else:
+            page.close()
+    except Exception:
+        pass
 
 
 class Submitted(Exception):

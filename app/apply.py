@@ -209,7 +209,7 @@ def workday(ctx, page):
                 vp = page.context.new_page()
                 vp.goto(link)
                 wait_settle(vp, 3000)
-                vp.close()
+                vp.close()          # page is still open, so Chrome keeps running
                 page.reload()
                 wait_settle(page, 3000)
             if page.locator(WD("password")).count():
