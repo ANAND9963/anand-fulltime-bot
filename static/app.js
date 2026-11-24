@@ -110,77 +110,142 @@ async function createProfile() {
 }
 
 // ---------- dashboard ----------
+let SETUP = null;
 async function refresh() {
   const [st, s] = await Promise.all([api(`/api/stats/${PID}`), api(`/api/status/${PID}`)]);
-  const cards = [['New', st.new], ['Queued', (st.queued || 0) + (st.applying || 0)], ['Applied', st.applied],
-    ['Need your answer', st.pending_questions], ['Failed / manual', st.failed], ['Skipped', st.skipped]];
-  for (const e of st.emails) cards.push([`Emails: ${e.kind}`, e.n]);
-  $('#stats').innerHTML = cards.map(([k, v]) => `<div class="stat"><b>${v || 0}</b>${k}</div>`).join('');
+  const cards = [['New jobs found', st.new, 'jobs:new'], ['Applying now', (st.queued || 0) + (st.applying || 0), 'jobs:queued,applying'],
+    ['Applied', st.applied, 'jobs:applied'], ['Questions for you', st.pending_questions, 'pending'],
+    ["Couldn't finish", st.failed, 'jobs:failed'], ['Skipped', st.skipped, 'jobs:skipped']];
+  const em = Object.fromEntries(st.emails.map(e => [e.kind, e.n]));
+  if (em.interview) cards.push(['Interview emails', em.interview, 'emails']);
+  if (em.rejected) cards.push(['Rejections', em.rejected, 'emails']);
+  $('#stats').innerHTML = cards.map(([k, v, go]) =>
+    `<button class="stat${k === 'Questions for you' && v ? ' alert' : ''}" onclick="goTo('${go}')"><b>${v || 0}</b>${k}</button>`).join('');
   $('#pendingBadge').textContent = st.pending_questions || '';
   const w = s.worker;
-  $('#workerState').textContent = `Browser: ${w.busy ? w.message : 'idle'} · queue ${s.queue}` + (s.search ? ` · searching: ${s.search === true ? '…' : s.search}` : '');
-  $('#logs').innerHTML = s.logs.map(l => `<div class="${l.level}">${esc(l.ts.slice(5, 19).replace('T', ' '))}  ${esc(l.msg)}</div>`).join('');
+  let line = s.paused_for ? 'Paused while you sign in' : w.busy ? friendlyTask(w) : s.search ? 'Searching company career pages…' : 'Idle';
+  if (s.queue) line += ` · ${s.queue} more waiting`;
+  $('#workerState').textContent = 'Bot: ' + line;
+  $('#workerState').className = 'state-line ' + (w.busy || s.search ? 'busy' : s.paused_for ? 'paused' : '');
+  $('#pausedNote').classList.toggle('hidden', !s.paused_for);
+  $('#pausedLeft').textContent = `${Math.ceil(s.paused_for / 60)} min`;
+  $('#logs').innerHTML = s.logs.map(l => `<div class="${l.level}">${esc(new Date(l.ts).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}))}  ${esc(l.msg)}</div>`).join('');
   $('#humanBar').classList.toggle('hidden', !w.waiting_human);
   $('#humanMsg').textContent = w.waiting_human ? w.message : '';
+  if (!SETUP || Date.now() - SETUP._at > 20000) loadSetup();
+}
+function friendlyTask(w) {
+  const [kind] = w.current || [];
+  if (kind === 'apply') return 'Applying to a job…';
+  if (kind === 'listing') return 'Reading job sites…';
+  if (kind === 'open') return 'Opening Chrome…';
+  return w.message;
+}
+function goTo(where) {
+  const [tab, status] = where.split(':');
+  if (status !== undefined) $('#jobStatus').value = status;
+  showTab(tab);
+}
+async function loadSetup() {
+  SETUP = await api(`/api/setup/${PID}`); SETUP._at = Date.now();
+  const req = SETUP.steps.filter(x => x.required), done = req.filter(x => x.done).length;
+  $('#setupProgress').textContent = SETUP.ready ? 'All set - the bot is ready to apply.' : `${done} of ${req.length} required steps done`;
+  $('#setupSteps').innerHTML = SETUP.steps.map(x => `<li class="${x.done ? 'done' : ''}">
+      <span class="tick">${x.done ? '✓' : ''}</span>
+      <div><b>${esc(x.title)}</b>${x.required ? '' : ' <span class="opt">optional</span>'}<div class="muted">${esc(x.detail)}</div></div>
+      ${x.done ? '' : `<button class="ghost" onclick="goSetup('${x.tab}')">${x.tab === 'signin' ? 'Sign in' : 'Go'}</button>`}</li>`).join('');
+  const hidden = ls.get('setupHidden') === '1' && SETUP.ready;
+  $('#setupSteps').classList.toggle('hidden', hidden);
+  $('#setupToggle').textContent = hidden ? 'Show' : 'Hide';
+  $('#siteButtons').innerHTML = SETUP.sites.filter(x => x.enabled).map(x =>
+    `<button class="site ${x.signed_in ? 'ok' : ''}" onclick="signin('${x.id}')">${esc(x.label)}${x.signed_in ? ' ✓' : ''}</button>`).join('');
+}
+function toggleSetup() {
+  const hide = !$('#setupSteps').classList.contains('hidden');
+  $('#setupSteps').classList.toggle('hidden', hide); ls.set('setupHidden', hide ? '1' : '');
+  $('#setupToggle').textContent = hide ? 'Show' : 'Hide';
+}
+function goSetup(tab) {
+  if (tab === 'signin') return $('#signinCard').scrollIntoView({behavior: 'smooth'});
+  showTab(tab);
+}
+const SIGNING = new Set();
+async function signin(site) {
+  await api(`/api/signin/${PID}`, {method: 'POST', body: {site}});
+  SIGNING.add(site);
+  toast(`Opened ${SETUP.sites.find(x => x.id === site).label} in the bot's Chrome window. Sign in there, then click "I'm done signing in".`);
+  refresh();
+}
+async function signinDone() {
+  await api(`/api/signin/${PID}/done`, {method: 'POST', body: {sites: [...SIGNING]}});
+  SIGNING.clear(); SETUP = null;
+  toast('Thanks - the bot is running again'); refresh();
+}
+async function openOther() {
+  const url = $('#openUrl').value.trim(); if (!url) return toast('Type a web address first', 'bad');
+  await api(`/api/signin/${PID}`, {method: 'POST', body: {url}});
+  toast(`Opened in the bot's Chrome window. The bot is paused until you click "I'm done signing in".`); refresh();
 }
 async function runSearch() {
   const sources = [];
   if ($('#srcAts').checked) sources.push('ats');
   if ($('#srcWeb').checked) sources.push('web');
   if ($('#srcList').checked) sources.push('listings');
+  if (!sources.length) return toast('Pick at least one place to search', 'bad');
   await api(`/api/search/${PID}`, {method: 'POST', body: {sources}});
+  toast('Searching - new jobs appear in the Jobs tab as they are found');
   refresh();
 }
 async function applyAll() {
-  const r = await api(`/api/jobs/${PID}/apply`, {method: 'POST', body: {all_new: true, min_score: Number($('#minScore').value), limit: Number($('#maxApply').value)}});
-  toast(`${r.queued} jobs queued`); refresh();
+  const r = await api(`/api/jobs/${PID}/apply`, {method: 'POST', body: {all_new: true, min_score: Number($('#minScore').value) / 100, limit: Number($('#maxApply').value)}});
+  toast(r.queued ? `Applying to ${r.queued} job${r.queued === 1 ? '' : 's'} - watch progress in the Jobs tab`
+    : 'No new jobs match yet - run Find jobs first, or lower the skill match');
+  refresh();
 }
-async function scanEmail() { await api(`/api/email/${PID}/scan`, {method: 'POST', body: {days: 21}}); toast('Mailbox scan started - see Activity'); }
-async function openBrowser() {
-  const url = $('#openUrl').value.trim() || 'https://jobright.ai/jobs/recommend?from=homepage';
-  const r = await api(`/api/browser/${PID}/open`, {method: 'POST', body: {url}});
-  toast(r.browser === 'built-in' ? 'Opening the built-in bot browser - sign in there once'
-    : `Opened in the bot's own ${r.browser.replace('.exe', '')} window - sign in there once; it stays signed in`);
-}
+async function scanEmail() { await api(`/api/email/${PID}/scan`, {method: 'POST', body: {days: 21}}); toast('Reading your mailbox - results appear in the Emails tab'); }
 async function stopWorker() {
   const r = await api('/api/worker/stop', {method: 'POST', body: {}});
-  toast(`Stopped - ${r.cleared} queued task(s) cleared` + (r.was_busy ? ', current job will stop at its next step' : ''));
+  toast(`Stopped${r.cleared ? ` - ${r.cleared} waiting task(s) cancelled` : ''}` + (r.was_busy ? '; the current job stops at its next step' : ''));
   refresh();
 }
 async function human(result) { await api('/api/worker/human', {method: 'POST', body: {result}}); refresh(); }
 
 // ---------- jobs ----------
+const STATUS = {new: 'New', queued: 'Waiting to apply', applying: 'Applying now', needs_input: 'Needs your answer',
+  needs_human: 'Needs you in Chrome', applied: 'Applied', failed: "Couldn't finish", skipped: 'Skipped'};
+const VISA = {yes: ['Sponsors', 'yes'], no: ['No sponsorship', 'no'], unknown: ['Not stated', 'unknown']};
+const SITE = {greenhouse: 'Greenhouse', lever: 'Lever', ashby: 'Ashby', workday: 'Workday', linkedin: 'LinkedIn', dice: 'Dice',
+  ziprecruiter: 'ZipRecruiter', monster: 'Monster', jobright: 'jobright', icims: 'iCIMS', smartrecruiters: 'SmartRecruiters',
+  other: 'Company site'};
 async function loadJobs() {
   const rows = await api(`/api/jobs/${PID}?status=${encodeURIComponent($('#jobStatus').value)}&q=${encodeURIComponent($('#jobQ').value)}`);
-  $('#jobRows').innerHTML = rows.map(j => `<tr>
+  $('#jobRows').innerHTML = rows.map(j => {
+    const [vl, vc] = VISA[j.sponsorship] || VISA.unknown;
+    const canApply = ['new', 'failed', 'skipped', 'needs_input'].includes(j.status);
+    const actions = canApply ? `<button onclick="applyOne(${j.id})">Apply</button>` +
+      (j.status !== 'skipped' ? `<button class="ghost" onclick="markOne(${j.id}, 'skipped')">Skip</button>` : '') : '';
+    const link = j.url && !j.url.startsWith('email:');
+    return `<tr>
     <td><input type="checkbox" class="sel" value="${j.id}"></td>
-    <td><a href="${esc(j.url)}" target="_blank">${esc(j.title)}</a></td>
-    <td>${esc(j.company)}</td><td>${esc(j.location)}</td><td>${esc(j.ats)}</td>
-    <td><span class="pill ${j.sponsorship}">${j.sponsorship}</span></td>
-    <td>${Math.round((j.score || 0) * 100)}%</td>
-    <td>${esc((j.posted_at || '').slice(0, 10))}</td>
-    <td><span class="pill ${j.status}">${j.status}</span><div class="note">${esc(j.status_note || '')}</div>
-      ${j.resume_used ? `<div class="note">resume: ${esc(j.resume_used.split(/[\\/]/).slice(-2).join('/'))}</div>` : ''}</td></tr>`).join('')
-    || '<tr><td colspan="9" class="muted">No jobs here. Run "Find jobs" on the Dashboard.</td></tr>';
+    <td>${link ? `<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>` : esc(j.title)}</td>
+    <td>${esc(j.company)}</td><td>${esc(j.location)}</td><td>${esc(SITE[j.ats] || j.ats || '')}</td>
+    <td><span class="pill ${vc}">${vl}</span></td>
+    <td>${j.score ? Math.round(j.score * 100) + '%' : ''}</td>
+    <td>${esc((j.posted_at || j.applied_at || '').slice(0, 10))}</td>
+    <td><span class="pill ${j.status}">${STATUS[j.status] || j.status}</span><div class="note">${esc(j.status_note || '')}</div>
+      ${j.resume_used ? `<div class="note">resume: ${esc(j.resume_used.split(/[\\/]/).slice(-2).join('/'))}</div>` : ''}</td>
+    <td class="actions">${actions}</td></tr>`;
+  }).join('') || `<tr><td colspan="10" class="muted">${$('#jobStatus').value === 'new' ? 'No new jobs yet. Click "Find jobs" on the Dashboard.' : 'Nothing here.'}</td></tr>`;
 }
-$('#jobStatus').onchange = loadJobs;
-$('#jobQ').oninput = () => { clearTimeout(window._jq); window._jq = setTimeout(loadJobs, 300); };
-$('#selAll').onchange = e => document.querySelectorAll('.sel').forEach(c => c.checked = e.target.checked);
-const selected = () => [...document.querySelectorAll('.sel:checked')].map(c => Number(c.value));
-async function applySelected() { const r = await api(`/api/jobs/${PID}/apply`, {method: 'POST', body: {ids: selected()}}); toast(`${r.queued} queued`); loadJobs(); }
-async function markSelected(status) { await api(`/api/jobs/${PID}/status`, {method: 'POST', body: {ids: selected(), status}}); loadJobs(); }
-async function addJob() {
-  const url = $('#addUrl').value.trim(); if (!url) return;
-  await api(`/api/jobs/${PID}/add`, {method: 'POST', body: {url, apply_now: true}});
-  $('#addUrl').value = ''; $('#jobStatus').value = ''; loadJobs();
-}
+async function applyOne(id) { await api(`/api/jobs/${PID}/apply`, {method: 'POST', body: {ids: [id]}}); toast('Applying - this row updates as it goes'); loadJobs(); }
+async function markOne(id, status) { await api(`/api/jobs/${PID}/status`, {method: 'POST', body: {ids: [id], status}}); loadJobs(); }
 
 // ---------- pending questions ----------
 async function loadPending() {
   const rows = await api(`/api/pending/${PID}`);
   $('#pendingList').innerHTML = rows.map(p => `<div class="q" data-q="${esc(p.question)}">
-     <div><b>${esc(p.question)}</b> <span class="muted">(${esc(p.field_type)}${p.company ? ' · first seen at ' + esc(p.company) : ''})</span>
-       <button class="ghost" style="float:right" onclick="dropPending(${p.id})">ignore</button></div>
+     <div><b>${esc(p.question)}</b> ${p.company ? `<span class="muted"> · asked by ${esc(p.company)}</span>` : ''}
+       <button class="ghost" style="float:right" onclick="dropPending(${p.id})" title="Remove without answering">Skip question</button></div>
      <div class="row">${p.field_type === 'textarea' ? '<textarea rows="3"></textarea>' : '<input style="flex:1">'}</div>
      ${p.options.length ? `<div class="opts">${p.options.slice(0, 40).map(o => `<button type="button" onclick="this.closest('.q').querySelector('input,textarea').value=this.textContent">${esc(o)}</button>`).join('')}</div>` : ''}
    </div>`).join('') || '<p class="muted">Nothing waiting. 🎉</p>';
@@ -193,30 +258,129 @@ async function savePending(retry) {
 }
 async function dropPending(id) { await api(`/api/pending/${PID}/${id}`, {method: 'DELETE'}); loadPending(); }
 
+// ---------- form helpers (plain-language labels, groups, Yes/No pickers) ----------
+const YESNO = ['Yes', 'No'];
+const DECLINE = 'Decline to self identify';
+// field: [label, help, options (dropdown) or 'long' (text area)]
+const PROFILE_GROUPS = [
+  ['Contact', {first_name: ['First name'], last_name: ['Last name'], full_name: ['Full name'], email: ['Email'],
+    phone: ['Phone'], linkedin: ['LinkedIn URL'], github: ['GitHub URL'], website: ['Website / portfolio']}],
+  ['Where you live', {address: ['Street address'], city: ['City'], state: ['State'], zip: ['ZIP code'],
+    country: ['Country'], willing_to_relocate: ['Willing to relocate?', '', YESNO]}],
+  ['Work authorization', {
+    work_authorization_answer: ['Are you legally authorized to work in the US?', 'Your answer on application forms', YESNO],
+    needs_sponsorship: ['Will you need visa sponsorship now or in the future?', 'Your answer on application forms', YESNO],
+    work_authorization: ['Your status', 'e.g. F-1 STEM OPT, H-1B, Green Card, US Citizen'],
+    visa_status: ['Visa type', 'e.g. OPT, H-1B']}],
+  ['Experience & education', {current_title: ['Current / last job title'], current_company: ['Current / last employer'],
+    years_experience: ['Years of experience'], school: ['School / university'], degree: ['Degree'], major: ['Major'],
+    graduation_year: ['Graduation year']}],
+  ['What you want', {target_titles: ['Job titles you want', 'Comma separated - also used to search', 'long'],
+    desired_salary: ['Desired salary', 'e.g. 120000'], notice_period: ['Notice period / start date', 'e.g. 2 weeks'],
+    referral_source: ['"How did you hear about us?" answer', 'e.g. LinkedIn'],
+    cover_letter_path: ['Cover letter file (optional)', 'Full path to a PDF/DOCX on your PC']}],
+  ['Voluntary self-identification (optional)', {
+    gender: ['Gender', '', ['Male', 'Female', 'Non-binary', DECLINE]],
+    race: ['Race / ethnicity', '', ['Asian', 'Black or African American', 'Hispanic or Latino', 'White',
+      'Native Hawaiian or Other Pacific Islander', 'American Indian or Alaska Native', 'Two or More Races', DECLINE]],
+    veteran_status: ['Veteran status', '', ['I am not a protected veteran', 'I identify as one or more of the classifications of protected veteran', DECLINE]],
+    disability_status: ['Disability', '', ['No, I do not have a disability', 'Yes, I have a disability (or previously had a disability)', DECLINE]],
+    pronouns: ['Pronouns']}],
+  ['About you', {skills: ['Skills', 'Comma separated - used for the match score', 'long'], summary: ['Summary', '', 'long']}],
+];
+const SETTING_GROUPS = [
+  ['What jobs to look for', {
+    search_keywords: ['Job titles to search', 'Comma separated, e.g. Software Engineer, Java Developer', 'long'],
+    search_locations: ['Locations', 'Comma separated, e.g. United States, Remote, Texas'],
+    max_job_age_days: ['Only jobs posted in the last … days'],
+    needs_sponsorship: ['Skip jobs that say they do not sponsor visas', '', 'bool'],
+    exclude_title_words: ['Skip titles containing', 'e.g. intern, manager, principal', 'long'],
+    job_sites: ['Job sites to search', '', 'sites']}],
+  ['Applying', {
+    auto_submit: ['Submit applications automatically', 'Off = the bot fills the form and you click Submit', 'bool'],
+    max_per_site_per_day: ['Most applications per job site per day', 'Keeps your LinkedIn/Dice accounts safe. 0 = no limit'],
+    min_score: ['Minimum skill match (0 to 1)', 'Default for "Apply to new matches"'],
+    ats_account_password: ['Password for Workday-style accounts', 'The bot uses it to create/sign in to company career accounts', 'secret']}],
+  ['Email', {
+    imap_user: ['Gmail address', 'The email you use on applications'],
+    imap_password: ['Gmail app password', 'Google Account > Security > App passwords (16 letters, no spaces)', 'secret'],
+    imap_host: ['Mail server', 'imap.gmail.com for Gmail, outlook.office365.com for Outlook']}],
+  ['Use it from your phone', {
+    online_url: ['Online dashboard address', 'Your Netlify site, e.g. https://quiet-blini-fd7a6c.netlify.app', 'pc'],
+    online_password: ['Online dashboard password', 'The APP_PASSWORD you set on Netlify', 'secret']}],
+  ['AI and search (optional)', {
+    anthropic_api_key: ['Claude API key', 'Lets the bot answer new questions from your resume', 'secret'],
+    llm_model: ['Claude model'],
+    serper_api_key: ['Serper.dev key', 'Better internet job search (Google results)', 'secret'],
+    brave_api_key: ['Brave Search key', 'Alternative to Serper', 'secret']}],
+  ['Advanced', {
+    headless: ['Hide the bot\'s Chrome window', 'Keep off: you need the window to sign in and pass robot checks', 'bool'],
+    chrome_path: ['Chrome location', 'Leave empty to find Chrome/Edge automatically', 'pc'],
+    greenhouse_boards: ['Extra Greenhouse companies', 'Board names, comma separated'],
+    lever_companies: ['Extra Lever companies'], ashby_orgs: ['Extra Ashby companies'],
+    workday_sites: ['Extra Workday sites', 'tenant|wdN|site, e.g. nvidia|wd5|NVIDIAExternalCareerSite'],
+    listing_urls: ['Extra search pages to read', 'One web address per line, e.g. a saved LinkedIn search', 'long']}],
+];
+const SITE_NAMES = {jobright: 'jobright.ai', linkedin: 'LinkedIn', dice: 'Dice', ziprecruiter: 'ZipRecruiter', monster: 'Monster'};
+
+function fieldHtml(k, v, [label, help = '', kind = ''], opts = {}) {
+  v = v ?? '';
+  let input;
+  if (Array.isArray(kind)) {
+    const known = kind.some(o => o.toLowerCase() === String(v).toLowerCase());
+    input = `<select data-k="${k}"><option value="">-</option>${kind.map(o => `<option ${o.toLowerCase() === String(v).toLowerCase() ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+      ${v && !known ? `<option selected>${esc(v)}</option>` : ''}</select>`;
+  } else if (kind === 'long') input = `<textarea data-k="${k}" rows="2">${esc(v)}</textarea>`;
+  else if (kind === 'bool') input = `<label class="switch"><input type="checkbox" data-k="${k}" data-bool="1" ${String(v).toLowerCase() === 'true' ? 'checked' : ''}><span>${String(v).toLowerCase() === 'true' ? 'On' : 'Off'}</span></label>`;
+  else if (kind === 'sites') {
+    const on = String(v).split(',').map(x => x.trim());
+    input = `<div class="checks" data-k="${k}" data-sites="1">${Object.entries(SITE_NAMES).map(([id, n]) =>
+      `<label><input type="checkbox" value="${id}" ${on.includes(id) ? 'checked' : ''}> ${n}</label>`).join('')}</div>`;
+  } else if (kind === 'secret') {
+    if (opts.online) input = `<input disabled value="${v === '__SET__' ? 'saved on your PC' : 'not set'}">`;
+    else input = `<input type="password" data-k="${k}" placeholder="${v === '__SET__' ? 'Saved - type a new one to change it' : 'Not set'}" autocomplete="new-password">`;
+  } else if (kind === 'pc' && opts.online) input = `<input disabled value="${esc(v)}">`;
+  else input = `<input data-k="${k}" value="${esc(v)}">`;
+  const note = opts.online && (kind === 'secret' || kind === 'pc') ? 'Change this on your PC - it never leaves your PC.' : help;
+  return `<label class="field"><span class="lbl">${esc(label)}</span>${input}${note ? `<span class="help">${esc(note)}</span>` : ''}</label>`;
+}
+function groupsHtml(groups, values, opts) {
+  const used = new Set();
+  const html = groups.map(([title, fields], i) => {
+    Object.keys(fields).forEach(k => used.add(k));
+    const advanced = title === 'Advanced';
+    const inner = `<div class="fields">${Object.entries(fields).map(([k, f]) => fieldHtml(k, values[k], f, opts)).join('')}</div>`;
+    return advanced ? `<details class="card group"><summary><h3>${title}</h3></summary>${inner}</details>`
+                    : `<div class="card group"><h3>${title}</h3>${inner}</div>`;
+  }).join('');
+  return {html, used};
+}
+function readFields(root) {
+  const out = {};
+  root.querySelectorAll('[data-k]').forEach(el => {
+    const k = el.dataset.k;
+    if (el.dataset.sites) out[k] = [...el.querySelectorAll('input:checked')].map(i => i.value).join(', ');
+    else if (el.dataset.bool) out[k] = el.checked ? 'true' : 'false';
+    else if (el.type === 'password') { if (el.value) out[k] = el.value; }
+    else out[k] = el.value.trim();
+  });
+  return out;
+}
+document.addEventListener('change', e => {
+  if (e.target.dataset && e.target.dataset.bool) e.target.nextElementSibling.textContent = e.target.checked ? 'On' : 'Off';
+});
+
 // ---------- profile ----------
-const HELP = {
-  needs_sponsorship: 'Yes / No - used for "will you require sponsorship" questions',
-  work_authorization: 'e.g. F-1 STEM OPT, H-1B, US Citizen, Green Card',
-  work_authorization_answer: 'Answer to "Are you legally authorized to work in the US?" (Yes / No)',
-  gender: 'or "Decline to self identify"', race: 'or "Decline to self identify"',
-  veteran_status: 'e.g. "I am not a protected veteran"', disability_status: 'e.g. "No, I do not have a disability"',
-  target_titles: 'comma separated - also used for searching', skills: 'comma separated - used for match score',
-  cover_letter_path: 'optional: full path to a cover letter file',
-};
-const EXTRA = ['work_authorization_answer', 'referral_source', 'cover_letter_path'];
 let PROF = {};
 async function loadProfile() {
   PROF = await api(`/api/profile/${PID}`);
   $('#profName').value = PROF.name;
   $('#resumeInfo').textContent = PROF.resume_path ? `Current: ${PROF.resume_path.split(/[\\/]/).slice(-2).join('/')} (${PROF.resume_chars} chars)` : 'No resume yet';
   loadResumes(); setDirty(false);
-  const keys = [...new Set([...PROF.fields, ...EXTRA, ...Object.keys(PROF.data)])];
-  $('#profFields').innerHTML = keys.map(k => {
-    const v = PROF.data[k] ?? '';
-    const big = ['skills', 'summary', 'target_titles'].includes(k);
-    return `<label>${k.replace(/_/g, ' ')}${HELP[k] ? ` <span class="help">${HELP[k]}</span>` : ''}
-      ${big ? `<textarea data-k="${k}" rows="3">${esc(v)}</textarea>` : `<input data-k="${k}" value="${esc(v)}">`}</label>`;
-  }).join('');
+  const {html, used} = groupsHtml(PROFILE_GROUPS, PROF.data, {});
+  const extra = Object.keys(PROF.data).filter(k => !used.has(k) && !['work_authorization_answer'].includes(k));
+  $('#profFields').innerHTML = html + (extra.length ? `<div class="card group"><h3>Other saved details</h3><div class="fields">${
+    extra.map(k => fieldHtml(k, PROF.data[k], [k.replace(/_/g, ' ')])).join('')}</div></div>` : '');
 }
 async function loadResumes() {
   const rows = await api(`/api/profile/${PID}/resumes`);
@@ -239,9 +403,8 @@ function addField() {
   PROF.data[k] = ''; $('#newFieldKey').value = ''; saveProfile().then(loadProfile);
 }
 async function saveProfile() {
-  const data = {};
-  document.querySelectorAll('#profFields [data-k]').forEach(i => { if (i.value.trim() || PROF.data[i.dataset.k] !== undefined) data[i.dataset.k] = i.value.trim(); });
-  Object.keys(PROF.data).forEach(k => { if (!(k in data)) data[k] = PROF.data[k]; });
+  const data = {...PROF.data, ...readFields($('#profFields'))};
+  for (const k of Object.keys(data)) if (data[k] === '' && PROF.data[k] === undefined) delete data[k];
   await api(`/api/profile/${PID}`, {method: 'PUT', body: {name: $('#profName').value, data}});
   PROF.data = data; setDirty(false);
   await loadProfiles();
@@ -293,45 +456,17 @@ async function loadEmails() {
 }
 
 // ---------- settings ----------
-const SET_HELP = {
-  anthropic_api_key: 'Claude API key - parses resumes and answers new questions (optional but recommended)',
-  llm_model: 'Claude model id', auto_submit: 'true = submit automatically; false = fill and wait for you to click Submit',
-  headless: 'false = you can watch the browser (needed for logins/CAPTCHAs)',
-  chrome_path: 'leave empty to auto-detect Chrome/Edge; otherwise the full path to chrome.exe',
-  online_url: 'your Netlify dashboard address, e.g. https://anand-jobbot.netlify.app (this PC then works for the online dashboard)',
-  online_password: 'the APP_PASSWORD you set on Netlify',
-  needs_sponsorship: 'true = skip postings that say they do not sponsor visas',
-  max_job_age_days: 'only jobs posted within N days', min_score: 'default minimum match score (0-1)',
-  imap_host: 'e.g. imap.gmail.com / outlook.office365.com', imap_user: 'mailbox used on applications',
-  imap_password: 'Gmail: create an App Password (Google Account → Security → App passwords)',
-  ats_account_password: 'password the bot uses to sign in / create accounts on Workday and similar portals',
-  search_keywords: 'job titles to search, comma separated', search_locations: 'comma separated (e.g. United States, Remote, Texas)',
-  exclude_title_words: 'skip titles containing these words', brave_api_key: 'optional: Brave Search API key for better web search',
-  serper_api_key: 'optional: serper.dev key (Google results) for better web search',
-  greenhouse_boards: 'extra Greenhouse board tokens (boards.greenhouse.io/<token>)', lever_companies: 'extra Lever company ids',
-  ashby_orgs: 'extra Ashby org ids', workday_sites: 'tenant|wdN|site e.g. nvidia|wd5|NVIDIAExternalCareerSite',
-  job_sites: 'job boards searched with your keywords in the bot browser: jobright, linkedin, dice, ziprecruiter, monster (remove any you do not want). Sign in to each once via Open bot browser',
-  max_per_site_per_day: 'most applications per job board per day (keeps your LinkedIn/Dice accounts safe); 0 = no limit',
-  listing_urls: 'optional extra search pages to scrape, one per line (e.g. a saved LinkedIn search URL)',
-};
 async function loadSettings() {
   const s = await api(`/api/settings/${PID}`);
-  $('#settingsForm').innerHTML = Object.entries(s).map(([k, v]) => {
-    const secret = /key|password/.test(k);
-    if (ONLINE && (secret || ['online_url', 'chrome_path'].includes(k)))
-      return `<label>${k.replace(/_/g, ' ')} <span class="help">${v === '__SET__' ? 'saved' : 'not set'} - change this on your PC (it never leaves your PC)</span><input disabled value="${v === '__SET__' ? '••••••' : esc(v)}"></label>`;
-    const input = k === 'listing_urls' ? `<textarea data-k="${k}" rows="3">${esc(v)}</textarea>`
-      : `<input data-k="${k}" ${secret ? 'type="password" placeholder="' + (v === '__SET__' ? '(saved - leave blank to keep)' : '') + '"' : ''} value="${secret ? '' : esc(v)}">`;
-    return `<label>${k.replace(/_/g, ' ')} <span class="help">${SET_HELP[k] || ''}</span>${input}</label>`;
-  }).join('');
+  const {html} = groupsHtml(SETTING_GROUPS, s, {online: ONLINE});
+  $('#settingsForm').innerHTML = html;
+  $('#setDirty').textContent = '';
 }
+$('#settingsForm').addEventListener('input', () => { $('#setDirty').textContent = 'Unsaved changes'; });
+$('#settingsForm').addEventListener('change', () => { $('#setDirty').textContent = 'Unsaved changes'; });
 async function saveSettings() {
-  const body = {};
-  document.querySelectorAll('#settingsForm [data-k]').forEach(i => {
-    if (i.type === 'password' && !i.value) return;
-    body[i.dataset.k] = i.value;
-  });
-  await api(`/api/settings/${PID}`, {method: 'PUT', body}); toast('Settings saved'); loadSettings();
+  await api(`/api/settings/${PID}`, {method: 'PUT', body: readFields($('#settingsForm'))});
+  toast('Settings saved'); SETUP = null; loadSettings();
 }
 
 // ---------- boot ----------

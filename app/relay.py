@@ -33,7 +33,7 @@ def _pages():
         pid = p["id"]
         out += [f"/api/status/{pid}", f"/api/stats/{pid}", f"/api/profile/{pid}", f"/api/profile/{pid}/resumes",
                 f"/api/settings/{pid}", f"/api/answers/{pid}", f"/api/pending/{pid}", f"/api/avoid/{pid}",
-                f"/api/emails/{pid}"]
+                f"/api/emails/{pid}", f"/api/setup/{pid}"]
         out += [f"/api/jobs/{pid}?status={quote(s, safe='')}&q=" for s in JOB_FILTERS]
     return out
 

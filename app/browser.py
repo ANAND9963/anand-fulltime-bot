@@ -2,6 +2,7 @@
 import queue
 import re
 import threading
+import time
 import traceback
 from datetime import datetime, timedelta, timezone
 
@@ -18,6 +19,7 @@ class Worker:
         self._human = threading.Event()
         self._human_result = None
         self._stop = False
+        self.paused_until = 0           # bot waits while you sign in to job sites
         self.ctx = None
         self.ctx_pid = None
         self.browser = None
@@ -140,6 +142,9 @@ class Worker:
             self.pw = pw
             while True:
                 kind, pid, arg = self.q.get()
+                while time.time() < self.paused_until and kind != "open":
+                    self.state.update(message="paused while you sign in to job sites")
+                    time.sleep(1)
                 self._stop = False
                 self.state.update(busy=True, current=(kind, arg), message=f"{kind} {arg or ''}")
                 try:

@@ -10,6 +10,7 @@ SITES = {
     "jobright": {
         "label": "jobright.ai",
         "domain": "jobright.ai",
+        "login": "https://jobright.ai/",
         "search": lambda kw, loc, days: "https://jobright.ai/jobs/recommend?from=homepage",
         "per_keyword": False,                  # recommendations page, not a keyword search
         "job_link": r"jobright\.ai/jobs/info/[\w-]+",
@@ -18,6 +19,7 @@ SITES = {
     "linkedin": {
         "label": "LinkedIn",
         "domain": "linkedin.com",
+        "login": "https://www.linkedin.com/login",
         "search": lambda kw, loc, days: (
             f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(kw)}&location={quote_plus(loc)}"
             f"&f_TPR=r{max(1, days) * 86400}&f_JT=F&sortBy=DD"),
@@ -28,6 +30,7 @@ SITES = {
     "dice": {
         "label": "Dice",
         "domain": "dice.com",
+        "login": "https://www.dice.com/dashboard/login",
         "search": lambda kw, loc, days: (
             f"https://www.dice.com/jobs?q={quote_plus(kw)}&location={quote_plus(loc)}"
             f"&filters.postedDate={'ONE' if days <= 1 else 'THREE' if days <= 3 else 'SEVEN'}"
@@ -39,6 +42,7 @@ SITES = {
     "ziprecruiter": {
         "label": "ZipRecruiter",
         "domain": "ziprecruiter.com",
+        "login": "https://www.ziprecruiter.com/login",
         "search": lambda kw, loc, days: (
             f"https://www.ziprecruiter.com/jobs-search?search={quote_plus(kw)}&location={quote_plus(loc)}"
             f"&days={1 if days <= 1 else 5 if days <= 5 else 10}&refine_by_employment=employment_type%3Afull_time"),
@@ -49,6 +53,7 @@ SITES = {
     "monster": {
         "label": "Monster",
         "domain": "monster.com",
+        "login": "https://www.monster.com/profile/detail",
         "search": lambda kw, loc, days: (
             f"https://www.monster.com/jobs/search?q={quote_plus(kw)}&where={quote_plus(loc)}"
             f"&recency={'today' if days <= 1 else 'last+3+days' if days <= 3 else 'last+week'}"),

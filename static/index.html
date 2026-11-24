@@ -8,7 +8,7 @@
 <link rel="icon" href="/static/icons/icon-192.png">
 <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
 <meta name="theme-color" content="#2f6fed">
-<link rel="stylesheet" href="/static/style.css?v=9">
+<link rel="stylesheet" href="/static/style.css?v=13">
 </head>
 <body>
 <header>
@@ -47,28 +47,61 @@
 <!-- DASHBOARD -->
 <section id="dash" class="tab active">
   <div class="stats" id="stats"></div>
-  <div class="card">
-    <h3>Run</h3>
-    <div class="row wrap">
-      <label><input type="checkbox" id="srcAts" checked> Company career APIs (Greenhouse / Lever / Ashby / Workday)</label>
-      <label><input type="checkbox" id="srcWeb" checked> Internet search for new openings</label>
-      <label><input type="checkbox" id="srcList" checked> Job boards (jobright, LinkedIn, Dice, ZipRecruiter, Monster)</label>
-    </div>
-    <div class="row wrap">
-      <button onclick="runSearch()">1. Find jobs</button>
-      <button onclick="applyAll()">2. Apply to all new matches</button>
-      <label>min match <input type="number" id="minScore" step="0.05" min="0" max="1" value="0.15" style="width:70px"></label>
-      <label>max <input type="number" id="maxApply" value="25" style="width:60px"></label>
-      <button class="ghost" onclick="scanEmail()">3. Read mailbox</button>
-      <input id="openUrl" placeholder="https://jobright.ai/jobs/recommend?from=homepage" style="min-width:260px">
-      <button class="ghost" onclick="openBrowser()">Open bot browser (log in to sites)</button>
-      <button class="danger" onclick="stopWorker()">Stop</button>
-    </div>
-    <div class="muted" id="workerState"></div>
+
+  <div class="card" id="setupCard">
+    <div class="card-head"><h3>Getting started</h3><span id="setupProgress" class="muted"></span>
+      <button class="link" id="setupToggle" onclick="toggleSetup()">Hide</button></div>
+    <ol id="setupSteps" class="steps"></ol>
   </div>
+
+  <div class="card" id="signinCard">
+    <div class="card-head"><h3>Sign in to job sites</h3><span class="muted">Do this once; the bot's Chrome remembers it.</span></div>
+    <p class="muted">Click a site: it opens in the bot's own Chrome window and the bot <b>pauses</b> so it doesn't get in your way.
+      Sign in there, then come back and click <b>I'm done signing in</b>.</p>
+    <div id="siteButtons" class="site-buttons"></div>
+    <div id="pausedNote" class="paused hidden">
+      <span>The bot is paused while you sign in (<span id="pausedLeft"></span> left).</span>
+      <button onclick="signinDone()">I'm done signing in</button>
+    </div>
+    <details class="more"><summary>Open another website in the bot's Chrome</summary>
+      <div class="row"><input id="openUrl" placeholder="https://..." style="flex:1"><button class="ghost" onclick="openOther()">Open</button></div>
+    </details>
+  </div>
+
   <div class="card">
-    <h3>Activity</h3>
-    <div id="logs" class="logs"></div>
+    <div class="card-head"><h3>Run the bot</h3><span id="workerState" class="state-line"></span></div>
+    <div class="run-grid">
+      <div class="run-step">
+        <div class="num">1</div>
+        <div><b>Find jobs</b><div class="muted">Searches the job sites and company career pages for your job titles.</div>
+          <details class="more"><summary>Where to search</summary>
+            <label><input type="checkbox" id="srcList" checked> Job sites (jobright, LinkedIn, Dice, ZipRecruiter, Monster)</label>
+            <label><input type="checkbox" id="srcAts" checked> Company career pages (Greenhouse, Lever, Ashby, Workday)</label>
+            <label><input type="checkbox" id="srcWeb" checked> Internet search for companies hiring now</label>
+          </details></div>
+        <button onclick="runSearch()">Find jobs</button>
+      </div>
+      <div class="run-step">
+        <div class="num">2</div>
+        <div><b>Apply</b><div class="muted">Applies to the best new matches. Check the Jobs tab first if you like.</div>
+          <details class="more"><summary>How many</summary>
+            <label>Up to <input type="number" id="maxApply" value="25" min="1" style="width:64px"> jobs</label>
+            <label>with at least <input type="number" id="minScore" step="5" min="0" max="100" value="15" style="width:64px">% skill match</label>
+          </details></div>
+        <button onclick="applyAll()">Apply to new matches</button>
+      </div>
+      <div class="run-step">
+        <div class="num">3</div>
+        <div><b>Check your email</b><div class="muted">Marks jobs as applied from confirmation emails and finds rejections and interviews.</div></div>
+        <button class="ghost" onclick="scanEmail()">Read mailbox</button>
+      </div>
+    </div>
+    <div class="row"><span class="spacer"></span><button class="danger" onclick="stopWorker()">Stop everything</button></div>
+  </div>
+
+  <div class="card">
+    <details id="activityBox"><summary><b>Activity log</b> <span class="muted">(what the bot is doing, for troubleshooting)</span></summary>
+      <div id="logs" class="logs"></div></details>
   </div>
 </section>
 
@@ -94,8 +127,8 @@
     <button onclick="addJob()">Add &amp; apply</button>
   </div>
   <table class="grid">
-    <thead><tr><th><input type="checkbox" id="selAll"></th><th>Title</th><th>Company</th><th>Location</th><th>ATS</th>
-      <th>Visa</th><th>Match</th><th>Posted</th><th>Status</th></tr></thead>
+    <thead><tr><th><input type="checkbox" id="selAll"></th><th>Title</th><th>Company</th><th>Location</th><th>Site</th>
+      <th>Visa</th><th>Match</th><th>Posted</th><th>Status</th><th></th></tr></thead>
     <tbody id="jobRows"></tbody>
   </table>
 </section>
@@ -125,7 +158,7 @@
   <div class="card">
     <h3>Profile <span class="muted">(used to fill forms)</span></h3>
     <div class="row"><label>Profile name <input id="profName"></label></div>
-    <div id="profFields" class="fields"></div>
+    <div id="profFields"></div>
     <div class="row"><input id="newFieldKey" placeholder="add custom field (e.g. referral_source)"><button class="ghost" onclick="addField()">Add field</button></div>
     <div class="row"><button onclick="saveProfile()">Save profile</button><span id="profDirty" class="dirty"></span>
       <span class="muted">Ctrl+S also saves</span></div>
@@ -160,10 +193,10 @@
 
 <!-- SETTINGS -->
 <section id="settings" class="tab">
-  <div id="settingsForm" class="fields"></div>
-  <button onclick="saveSettings()">Save settings</button>
+  <div id="settingsForm"></div>
+  <div class="row sticky-save"><button onclick="saveSettings()">Save settings</button><span id="setDirty" class="dirty"></span></div>
 </section>
 </main>
-<script src="/static/app.js?v=9"></script>
+<script src="/static/app.js?v=13"></script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 import json
 import shutil
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -371,6 +372,7 @@ def emails(pid: int):
 def status(pid: int):
     w = get_worker()
     return {"worker": w.state, "queue": w.queue_size(), "search": _search_running.get(pid) or False,
+            "paused_for": max(0, int(w.paused_until - time.time())),
             "logs": db.q("SELECT ts, level, msg FROM logs WHERE profile_id IN (0, ?) ORDER BY id DESC LIMIT 80", (pid,))}
 
 
@@ -403,6 +405,86 @@ def open_browser(pid: int, body: dict = Body(default={})):
     get_worker().enqueue("open", pid, url)          # no Chrome/Edge installed: use the built-in browser
     return {"ok": True, "browser": "built-in"}
 
+
+# ---------------- getting started: checklist + signing in to job sites ----------------
+CORE_FIELDS = {"first_name": "first name", "last_name": "last name", "email": "email", "phone": "phone",
+               "city": "city", "state": "state", "country": "country",
+               "needs_sponsorship": "needs visa sponsorship (Yes/No)",
+               "work_authorization_answer": "authorized to work in the US (Yes/No)"}
+
+
+def _signed_in(pid):
+    return [s for s in (db.get_settings(pid).get("signed_in_sites") or "").split(",") if s]
+
+
+@app.get("/api/setup/{pid}")
+def setup(pid: int):
+    """What is done and what is left before the bot can apply well."""
+    p = _profile(pid)
+    s = db.get_settings(pid)
+    data = p["data"]
+    missing = [label for k, label in CORE_FIELDS.items() if not str(data.get(k) or "").strip()]
+    keywords, _, _ = search.search_terms(pid)
+    enabled = sites.enabled_sites(s)
+    signed = _signed_in(pid)
+    online_url = s.get("online_url")
+    steps = [
+        {"id": "resume", "title": "Upload your resume", "done": bool(p["resume_path"]), "required": True,
+         "detail": "The bot uploads it and reads it to answer questions.", "tab": "profile"},
+        {"id": "profile", "title": "Fill in your basic details", "done": not missing, "required": True,
+         "detail": ("Missing: " + ", ".join(missing)) if missing else "Contact, location and work authorization are filled in.",
+         "tab": "profile"},
+        {"id": "search", "title": "Choose the jobs to look for", "done": bool(s.get("search_keywords") or data.get("target_titles")),
+         "required": True, "detail": "Searching for: " + ", ".join(keywords[:6]), "tab": "settings"},
+        {"id": "sites", "title": "Sign in to the job sites", "done": all(x in signed for x in enabled if x != "jobright") and bool(enabled),
+         "required": True, "detail": ("Signed in: " + ", ".join(sites.SITES[x]["label"] for x in signed if x in sites.SITES))
+                                     if signed else "LinkedIn, Dice and the others need you to sign in once.", "tab": "signin"},
+        {"id": "email", "title": "Connect your Gmail", "done": bool(s.get("imap_user") and s.get("imap_password")),
+         "required": False, "detail": "Reads confirmations, rejections and verification codes.", "tab": "settings"},
+        {"id": "workday", "title": "Pick a password for Workday accounts", "done": bool(s.get("ats_account_password")),
+         "required": False, "detail": "Workday asks for an account on every company site.", "tab": "settings"},
+        {"id": "ai", "title": "Add a Claude API key", "done": bool(s.get("anthropic_api_key")), "required": False,
+         "detail": "Lets the bot answer new questions from your resume instead of asking you.", "tab": "settings"},
+        {"id": "online", "title": "Use it from your phone", "done": bool(online_url and relay.state.get("connected")),
+         "required": False, "detail": ("Connected to " + online_url) if relay.state.get("connected")
+                                      else "Optional: put the dashboard online (see README).", "tab": "settings"},
+    ]
+    return {"steps": steps, "ready": all(x["done"] for x in steps if x["required"]),
+            "sites": [{"id": k, "label": v["label"], "signed_in": k in signed, "enabled": k in enabled}
+                      for k, v in sites.SITES.items()]}
+
+
+@app.post("/api/signin/{pid}")
+def signin(pid: int, body: dict = Body(...)):
+    """Open a job site's sign-in page in the bot Chrome and pause the bot so it doesn't open tabs in your way."""
+    site = sites.SITES.get(body.get("site"))
+    url = site["login"] if site else (body.get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "Unknown site")
+    w = get_worker()
+    w.paused_until = time.time() + 20 * 60
+    if not chrome.ensure_running(pid, url):
+        w.enqueue("open", pid, url)
+    db.log(pid, f"Paused the bot while you sign in to {site['label'] if site else url}")
+    return {"ok": True, "paused_minutes": 20}
+
+
+@app.post("/api/signin/{pid}/done")
+def signin_done(pid: int, body: dict = Body(default={})):
+    signed = _signed_in(pid)
+    for k in body.get("sites", []):
+        if k in sites.SITES and k not in signed:
+            signed.append(k)
+    db.set_settings(pid, {"signed_in_sites": ",".join(signed)})
+    get_worker().paused_until = 0
+    db.log(pid, "Bot resumed after sign-in")
+    return {"ok": True, "signed_in": signed}
+
+
+@app.post("/api/worker/resume")
+def resume_worker():
+    get_worker().paused_until = 0
+    return {"ok": True}
 
 # ---------------- online dashboard (Netlify) ----------------
 @app.get("/api/_meta")

@@ -182,6 +182,7 @@ DEFAULT_SETTINGS = {
     "exclude_title_words": "intern, internship, director, manager, principal, staff, lead, clearance, phd",
     "job_sites": "jobright, linkedin, dice, ziprecruiter, monster",   # boards searched in the bot Chrome
     "max_per_site_per_day": "25",        # cap per board per day (protects your LinkedIn/Dice accounts)
+    "signed_in_sites": "",               # job sites you said you signed in to (set by the Sign in panel)
     "listing_urls": "",                  # extra search/listing pages to scrape, one per line
 }
 
